@@ -1,0 +1,18 @@
+name: Unzip project
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  unzip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          unzip -o tenderbot-ai-production.zip
+          cp -r tenderbot-ai/. .
+          rm -rf tenderbot-ai tenderbot-ai-production.zip
+          git config user.name "bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          git commit -m "Unzip project"
+          git push
