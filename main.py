@@ -2,19 +2,21 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 from datetime import date
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
 
 from agents import LLMUnavailable, format_inr, llm_available
 from agents import (analyzer_agent, bg_emd_agent, communication_agent, competitor_agent, marketplace_agent,
                     payment_delay_agent, scraper_agent, tax_agent, vault_agent)
 from config import get_settings
+from pwa import router as pwa_router
 from database import (Contractor, PaymentBill, SessionLocal, Submission, Tender, check_access, get_db,
                       get_or_create_contractor, init_db, normalize_phone, utcnow)
 
@@ -46,6 +48,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
+app.include_router(pwa_router)
 
 
 # ------------------------------------------------------------------ schemas (Pydantic v2)
@@ -182,6 +185,35 @@ class SetPlanRequest(BaseModel):
 
 class DiscoverRequest(BaseModel):
     url: str
+    category: str | None = None
+    district: str | None = None
+    save: bool = True
+
+
+class TenderIn(BaseModel):
+    phone: str
+    tender_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    department: str = Field(min_length=1)
+    category: str = "general"
+    district: str | None = None
+    estimated_cost: float = Field(gt=0)
+    emd_amount: float | None = Field(default=None, ge=0)
+    source_url: str | None = None
+
+
+class ProfileIn(BaseModel):
+    phone: str
+    name: str | None = None
+    contractor_class: str | None = None
+    categories: list[str] = Field(default_factory=list)
+    districts: list[str] = Field(default_factory=list)
+    annual_turnover: float | None = Field(default=None, ge=0)
+
+
+class DecisionIn(BaseModel):
+    phone: str
+    decision: str = Field(pattern="^(YES|NO)$")
 
 
 # ------------------------------------------------------------------ helpers
@@ -487,14 +519,108 @@ def vault_list(phone: str, db: Session = Depends(get_db)) -> dict:
 
 
 @app.post("/discover-tenders")
-def discover_tenders(req: DiscoverRequest) -> dict:
+def discover_tenders(req: DiscoverRequest, db: Session = Depends(get_db)) -> dict:
     try:
         rows = scraper_agent.discover_active_tenders(req.url)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     except Exception as exc:
         raise HTTPException(502, f"पेज वाचता आले नाही: {exc}")
-    return {"count": len(rows), "tenders": rows[:100]}
+    saved = 0
+    if req.save:
+        for row in rows:
+            ref = (row.get("tender_ref") or "").strip()
+            if not ref:
+                ref = "WEB-" + hashlib.sha1(f"{row.get('title')}|{row['estimated_cost']}".encode("utf-8")).hexdigest()[:12]
+            if db.scalar(select(Tender.id).where(Tender.tender_ref == ref)):
+                continue
+            db.add(Tender(tender_ref=ref, title=row.get("title") or ref, department=row.get("department") or "—",
+                          category=req.category or "general", district=req.district,
+                          estimated_cost=row["estimated_cost"], source_url=req.url))
+            saved += 1
+        db.commit()
+    return {"count": len(rows), "saved": saved, "tenders": rows[:100]}
+
+
+def _tender_view(t: Tender) -> dict:
+    return {"tender_id": t.tender_ref, "title": t.title, "department": t.department, "category": t.category,
+            "district": t.district, "estimated_cost": t.estimated_cost, "emd_amount": t.emd_amount,
+            "source_url": t.source_url}
+
+
+@app.get("/tenders/search")
+def tenders_search(q: str | None = None, category: str | None = None, district: str | None = None,
+                   department: str | None = None, min_cost: float | None = None, max_cost: float | None = None,
+                   limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)) -> dict:
+    stmt = select(Tender)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(or_(Tender.title.ilike(like), Tender.department.ilike(like), Tender.tender_ref.ilike(like)))
+    if category and category.strip():
+        stmt = stmt.where(Tender.category.ilike(f"%{category.strip()}%"))
+    if district and district.strip():
+        stmt = stmt.where(Tender.district.ilike(f"%{district.strip()}%"))
+    if department and department.strip():
+        stmt = stmt.where(Tender.department.ilike(f"%{department.strip()}%"))
+    if min_cost is not None:
+        stmt = stmt.where(Tender.estimated_cost >= min_cost)
+    if max_cost is not None:
+        stmt = stmt.where(Tender.estimated_cost <= max_cost)
+    rows = list(db.scalars(stmt.order_by(Tender.created_at.desc()).limit(limit)))
+    return {"count": len(rows), "tenders": [_tender_view(t) for t in rows]}
+
+
+@app.post("/tenders")
+def tenders_upsert(req: TenderIn, db: Session = Depends(get_db)) -> dict:
+    contractor = contractor_for(db, req.phone)
+    gate(contractor, "analyze")
+    tender = db.scalar(select(Tender).where(Tender.tender_ref == req.tender_id))
+    if tender is None:
+        tender = Tender(tender_ref=req.tender_id, title=req.title, department=req.department, category=req.category,
+                        district=req.district, estimated_cost=req.estimated_cost, emd_amount=req.emd_amount,
+                        source_url=req.source_url)
+        db.add(tender)
+    else:
+        tender.title, tender.department, tender.category = req.title, req.department, req.category
+        tender.district, tender.estimated_cost, tender.emd_amount = req.district, req.estimated_cost, req.emd_amount
+    db.commit()
+    return _tender_view(tender)
+
+
+def _profile_view(c: Contractor) -> dict:
+    return {"phone": c.phone, "name": c.name, "contractor_class": c.contractor_class, "categories": c.categories or [],
+            "districts": c.districts or [], "annual_turnover": c.annual_turnover, **plan_info(c)}
+
+
+@app.get("/me")
+def me_get(phone: str, db: Session = Depends(get_db)) -> dict:
+    return _profile_view(contractor_for(db, phone))
+
+
+@app.post("/me")
+def me_save(req: ProfileIn, db: Session = Depends(get_db)) -> dict:
+    return _profile_view(contractor_for(db, req.phone, name=req.name, contractor_class=req.contractor_class,
+                                        categories=req.categories, districts=req.districts,
+                                        annual_turnover=req.annual_turnover))
+
+
+@app.get("/submissions")
+def submissions_list(phone: str, db: Session = Depends(get_db)) -> dict:
+    contractor = contractor_for(db, phone)
+    rows = db.scalars(select(Submission).where(Submission.contractor_id == contractor.id)
+                      .order_by(Submission.created_at.desc()).limit(30))
+    return {"submissions": [{"id": s.id, "tender_ref": s.tender_ref, "tender_title": s.tender_title,
+                             "bid_amount": s.bid_amount, "status": s.status, "detail": s.status_detail,
+                             "created_at": s.created_at.isoformat()} for s in rows], **plan_info(contractor)}
+
+
+@app.post("/submissions/{submission_id}/decision")
+def submission_decision(submission_id: int, req: DecisionIn, db: Session = Depends(get_db)) -> dict:
+    contractor = contractor_for(db, req.phone)
+    submission = db.get(Submission, submission_id)
+    if submission is None or submission.contractor_id != contractor.id:
+        raise HTTPException(404, "सबमिशन सापडले नाही")
+    return apply_decision(db, submission, req.decision, "app")
 
 
 # ------------------------------------------------------------------ admin

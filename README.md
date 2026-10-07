@@ -22,6 +22,12 @@ and features that need GPT-4o (extracting requirements from raw `tender_text`) r
 
 Regenerate the whole repo as a zip: `python build_zip.py` → `tenderbot-ai-production.zip`.
 
+## मोबाइल ॲप (PWA)
+Open `{PUBLIC_BASE_URL}/app` in Chrome on your phone → menu ⋮ → **Add to Home screen / Install app**.
+Screens: टेंडर शोध · बिड रेट · सबमिशन मंजुरी · डॉक्युमेंट व्हॉल्ट · GST सल्ला · प्रोफाइल.
+APK: paste the `/app` URL into pwabuilder.com and download the Android package.
+Login is currently just the phone number (no OTP) — add OTP login before onboarding real customers.
+
 ## Business rules (enforced in `database.check_access`)
 | Status | Access |
 |---|---|
@@ -51,7 +57,12 @@ Regenerate the whole repo as a zip: `python build_zip.py` → `tenderbot-ai-prod
 | POST | `/generate-emd-kit` | EMD / BG document kit |
 | GET | `/marketplace/search` | verified vendors |
 | POST/GET | `/vault/documents` | document vault |
-| POST | `/discover-tenders` | read a public listing page (allow-listed hosts) |
+| POST | `/discover-tenders` | read a public listing page (allow-listed hosts) and save tenders |
+| GET/POST | `/tenders/search`, `/tenders` | search / add tenders |
+| GET/POST | `/me` | profile + plan status |
+| GET | `/submissions?phone=` | list submissions |
+| POST | `/submissions/{id}/decision` | approve/cancel inside the app |
+| GET | `/app` | the PWA |
 | POST | `/admin/*` (header `X-Admin-Key`) | ingest awarded data, add vendors, set plan, run vault alerts |
 
 Feed the competitor AI first: `POST /admin/ingest-awarded-data` with `{"source":"Mahatenders","url":"..."}`
