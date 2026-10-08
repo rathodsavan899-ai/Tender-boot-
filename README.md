@@ -26,7 +26,9 @@ Regenerate the whole repo as a zip: `python build_zip.py` → `tenderbot-ai-prod
 Open `{PUBLIC_BASE_URL}/app` in Chrome on your phone → menu ⋮ → **Add to Home screen / Install app**.
 Screens: टेंडर शोध · बिड रेट · सबमिशन मंजुरी · डॉक्युमेंट व्हॉल्ट · GST सल्ला · प्रोफाइल.
 APK: paste the `/app` URL into pwabuilder.com and download the Android package.
-Login is currently just the phone number (no OTP) — add OTP login before onboarding real customers.
+Login: SMS OTP via Twilio Verify. Uploaded documents are AES-encrypted (Fernet) in the database; Aadhaar numbers are never stored.
+Required env vars on the host: `TWILIO_VERIFY_SERVICE_SID`, `FILE_ENCRYPTION_SECRET` (never change/lose it), `OPENAI_API_KEY` (AI chat),
+and a persistent PostgreSQL `DATABASE_URL` (SQLite on free hosts is wiped on redeploy, which would delete users, sessions and files).
 
 ## Business rules (enforced in `database.check_access`)
 | Status | Access |

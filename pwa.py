@@ -28,7 +28,7 @@ MANIFEST = {
     ],
 }
 
-SW_JS = """const CACHE='tenderbot-shell-v2';
+SW_JS = """const CACHE='tenderbot-shell-v3';
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(['/app'])));self.skipWaiting();});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))));self.clients.claim();});
 self.addEventListener('fetch',e=>{
@@ -161,6 +161,21 @@ dialog::backdrop{background:rgba(5,12,25,.6)}
 .pr{border:1.5px dashed var(--line);border-radius:14px;padding:10px;margin-top:10px}
 .langpick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:8px 0}
 .langpick button{border:2px solid var(--line);background:var(--card);color:var(--text);border-radius:14px;padding:14px;font-size:17px;font-weight:800}.langpick button.on{border-color:var(--p2);background:var(--soft);color:var(--p2)}
+.bar2{height:9px;background:var(--soft);border-radius:9px;overflow:hidden;margin-top:8px}.bar2 i{display:block;height:100%;background:var(--ok);border-radius:9px;width:0;transition:width .4s}
+#chatFab{position:fixed;right:14px;bottom:calc(98px + env(safe-area-inset-bottom));z-index:11;width:56px;height:56px;border-radius:50%;border:0;background:linear-gradient(135deg,var(--acc),#ff7a00);color:#fff;font-size:26px;box-shadow:0 10px 24px rgba(255,122,0,.4)}
+body.anon #chatFab{display:none}
+dialog.chat{padding:0;height:min(88vh,680px);overflow:hidden}
+dialog.chat[open]{display:flex;flex-direction:column}
+.chat .ch{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:linear-gradient(135deg,var(--p1),var(--p2));color:#fff;font-weight:800}
+.chat .ch button{background:none;border:0;color:#fff;font-size:22px}
+#chatLog{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+.msg{max-width:86%;padding:10px 12px;border-radius:16px;font-size:15px;word-wrap:break-word}
+.msg.bot{background:var(--soft);align-self:flex-start;border-bottom-left-radius:4px}
+.msg.me{background:var(--p2);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;padding:0 12px 8px}.chips button{border:1px solid var(--line);background:var(--card);color:var(--p2);border-radius:99px;padding:6px 11px;font-size:13px;font-weight:700}
+.chat .cin{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line)}.chat .cin input{flex:1}.chat .cin button{width:50px;border:0;border-radius:13px;background:var(--p2);color:#fff;font-size:20px}
+.row2{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}.row2:last-child{border-bottom:0}.row2 b{display:block}
+.docacts{white-space:nowrap}.docacts button{border:0;background:var(--soft);color:var(--p2);border-radius:10px;padding:8px 10px;font-weight:700;font-size:14px;margin-left:4px}.docacts button.dng{color:var(--bad)}
 </style></head><body class="anon">
 <header>
  <div class="hrow">
@@ -173,19 +188,35 @@ dialog::backdrop{background:rgba(5,12,25,.6)}
 
 <section id="s-welcome" class="screen">
  <div class="hero"><h2 data-i="wTitle"></h2><p data-i="wSub"></p></div>
- <div class="card">
+ <div class="card" id="wStep1">
   <label data-i="chooseLang"></label>
   <div class="langpick"><button data-lang="mr" onclick="setLang('mr')">मराठी</button><button data-lang="en" onclick="setLang('en')">English</button></div>
-  <label data-i="yourName"></label><input id="w_name" autocomplete="name" data-ip="yourNamePh">
   <label data-i="yourPhone"></label><input id="w_phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+919876543210">
   <div class="muted" data-i="phoneHelp" style="margin-top:6px"></div>
-  <button class="btn" onclick="startApp(this)" data-i="start"></button><div id="wRes"></div>
+  <button class="btn" onclick="sendOtp(this)" data-i="sendOtp"></button>
  </div>
+ <div class="card" id="wStep2" style="display:none">
+  <p id="otpSentTxt" style="margin-top:0"></p>
+  <label data-i="enterCode"></label><input id="w_code" inputmode="numeric" maxlength="8" autocomplete="one-time-code" style="font-size:26px;letter-spacing:8px;text-align:center">
+  <button class="btn" onclick="verifyOtp(this)" data-i="verifyLogin"></button>
+  <button class="btn sec" onclick="sendOtp(this)" data-i="resend"></button>
+  <button class="btn sec" onclick="wStep(1)" data-i="changeNumber"></button>
+ </div>
+ <div class="card" id="wStep3" style="display:none">
+  <h3 style="margin-top:0" data-i="aboutYou"></h3>
+  <label data-i="yourName"></label><input id="w_name" autocomplete="name" data-ip="yourNamePh">
+  <label data-i="companyName"></label><input id="w_company" autocomplete="organization">
+  <label data-i="whichTenders"></label><input id="w_cats" list="cats" data-ip="catsPh">
+  <button class="btn" onclick="finishSetup(this)" data-i="continue"></button>
+ </div>
+ <div id="wRes"></div>
 </section>
 
 <section id="s-home" class="screen">
  <div class="hero"><h2 id="hHello"></h2><p data-i="hSub"></p><div class="bar"><i id="hBar"></i></div><p id="hTrial" style="margin-top:8px;font-size:13px"></p></div>
  <div class="stats"><div class="stat"><b id="stPending">–</b><small data-i="stPending"></small></div><div class="stat"><b id="stExpiring">–</b><small data-i="stExpiring"></small></div></div>
+ <button class="card" id="hDocs" onclick="go('vault')" style="width:100%;text-align:left;color:inherit">
+  <b data-i="hDocsTitle"></b><div class="muted" id="hDocsSub"></div><div class="bar2"><i id="hDocsBar"></i></div></button>
  <div class="tiles">
   <button class="tile" onclick="go('search')"><div class="ic" style="background:#e0f2fe">🔍</div><b data-i="nSearch"></b><small data-i="tSearch"></small></button>
   <button class="tile" onclick="go('predict')"><div class="ic" style="background:#dcfce7">📈</div><b data-i="nBid"></b><small data-i="tBid"></small></button>
@@ -241,17 +272,9 @@ dialog::backdrop{background:rgba(5,12,25,.6)}
 
 <section id="s-vault" class="screen">
  <div class="title"><div class="ic">🗂️</div><div><h2 data-i="nVault"></h2><p data-i="subVault"></p></div></div>
+ <div class="card"><b id="vProg"></b><div class="bar2"><i id="vBar"></i></div><div class="muted" data-i="aadhaarNote" style="margin-top:8px"></div></div>
  <div id="vaultList"></div>
- <div class="card"><h3 style="margin-top:0" data-i="addDocT"></h3>
-  <label data-i="docType"></label><select id="vd_type">
-   <option value="GST Registration" data-i="dt_gst"></option><option value="PAN Card" data-i="dt_pan"></option><option value="PWD Registration" data-i="dt_pwd"></option>
-   <option value="Class-1 Certificate" data-i="dt_c1"></option><option value="EPF Certificate" data-i="dt_epf"></option><option value="ESIC Certificate" data-i="dt_esic"></option>
-   <option value="Labour Licence" data-i="dt_lab"></option><option value="Solvency Certificate" data-i="dt_sol"></option><option value="Turnover Certificate" data-i="dt_turn"></option>
-   <option value="ITR" data-i="dt_itr"></option><option value="Udyam Registration" data-i="dt_udyam"></option><option value="DSC" data-i="dt_dsc"></option></select>
-  <label data-i="docOther"></label><input id="vd_other">
-  <label data-i="docNo"></label><input id="vd_num"><label data-i="docExp"></label><input id="vd_exp" type="date">
-  <label data-i="docLink"></label><input id="vd_ref" type="url">
-  <button class="btn" onclick="addDoc(this)" data-i="addBtn"></button></div>
+ <button class="btn sec" onclick="docDialog(-1)" data-i="addOther"></button>
 </section>
 
 <section id="s-gst" class="screen">
@@ -270,12 +293,15 @@ dialog::backdrop{background:rgba(5,12,25,.6)}
 <section id="s-profile" class="screen">
  <div class="title"><div class="ic">👤</div><div><h2 data-i="nProfile"></h2><p data-i="tProfile"></p></div></div>
  <div class="card">
-  <label data-i="yourPhone"></label><input id="pf_phone" type="tel" inputmode="tel" placeholder="+919876543210">
+  <label data-i="yourPhone"></label><input id="pf_phone" readonly>
   <label data-i="yourName"></label><input id="pf_name">
+  <label data-i="companyName"></label><input id="pf_company">
   <div class="grid2"><div><label data-i="cls"></label><input id="pf_class" placeholder="Class 1"></div><div><label data-i="turnover"></label><input class="amt" id="pf_turn" type="number" inputmode="decimal"></div></div>
   <label data-i="cats"></label><input id="pf_cats" placeholder="civil, road"><label data-i="dists"></label><input id="pf_dists" data-ip="distsPh">
   <button class="btn" onclick="saveProfile(this)" data-i="save"></button>
+  <button class="btn sec" onclick="go('vault')" data-i="myDocsBtn"></button>
   <button class="btn sec" id="installBtn" style="display:none" onclick="installApp()" data-i="install"></button>
+  <button class="btn sec" onclick="logout()" data-i="logout"></button>
   <div id="pfRes"></div></div>
 </section>
 </main>
@@ -289,12 +315,21 @@ dialog::backdrop{background:rgba(5,12,25,.6)}
  <button data-s="gst" onclick="go('gst')"><span>🧾</span><em style="font-style:normal">GST</em></button>
 </nav>
 <datalist id="cats"><option>civil</option><option>road</option><option>building</option><option>water supply</option><option>electrical</option><option>sand</option><option>material supply</option><option>labour</option></datalist>
+<button id="chatFab" onclick="openChat()" aria-label="AI">💬</button>
+<dialog id="chatDlg" class="chat">
+ <div class="ch"><span data-i="chatTitle"></span><button onclick="$('#chatDlg').close()" aria-label="close">✕</button></div>
+ <div id="chatLog"></div><div class="chips" id="chatChips"></div>
+ <div class="cin"><input id="chatIn" data-ip="chatPh" onkeydown="if(event.key==='Enter')sendChat()"><button onclick="sendChat()">➤</button></div>
+</dialog>
 <div id="toast"></div><dialog id="dlg"></dialog>
 
 <script>
 /* ================= i18n ================= */
 const I={
 mr:{
+sendOtp:'OTP पाठवा',otpSent:'{p} वर SMS ने OTP पाठवला आहे',enterCode:'OTP टाका',verifyLogin:'तपासा आणि लॉगिन करा',resend:'OTP पुन्हा पाठवा',changeNumber:'नंबर बदला',aboutYou:'तुमची माहिती',companyName:'कंपनी / फर्मचे नाव',whichTenders:'कोणत्या प्रकारचे टेंडर हवेत?',catsPh:'उदा. civil, road, building',continue:'पुढे चला',logout:'लॉगआउट',sessionExpired:'सेशन संपले. कृपया पुन्हा लॉगिन करा.',
+chatTitle:'🤖 AI सहाय्यक',chatPh:'तुमचा प्रश्न लिहा…',chatHello:'नमस्कार भाऊ! मी टेंडर, कागदपत्रे आणि GST बद्दल मदत करू शकतो. काय विचारायचे आहे?',chip1:'टेंडरसाठी कोणती कागदपत्रे लागतात?',chip2:'माझे कोणते कागदपत्र संपत आहे?',chip3:'EMD म्हणजे काय?',
+vProg:'कागदपत्रे पूर्ण: {n}/{m}',missingDoc:'जोडलेले नाही',noFile:'फाइल नाही',add:'जोडा',addOther:'➕ दुसरे कागदपत्र जोडा',viewTitle:'कागदपत्र',download:'डाउनलोड',fileLabel:'फाइल (फोटो/PDF, कमाल 5 MB)',needType:'कागदपत्राचा प्रकार लिहा.',aadhaarNote:'🔒 कागदपत्रे एन्क्रिप्ट करून ठेवली जातात. आधार नंबर सेव्ह केला जात नाही, फक्त फाइल.',dt_aadhaar:'आधार कार्ड',e413:'फाइल खूप मोठी आहे (कमाल 5 MB)',e415:'फक्त PDF, JPG, PNG किंवा WEBP चालते',e429:'खूप प्रयत्न झाले. थोड्या वेळाने पुन्हा करा',e400:'चुकीची माहिती / OTP',delConfirm:'हे कागदपत्र काढायचे?',hDocsTitle:'🗂️ माझी कागदपत्रे',hDocsSub:'{n}/{m} पूर्ण — बाकी जोडा',myDocsBtn:'🗂️ कागदपत्रे अपलोड करा',
 wTitle:'नमस्कार! TenderBot मध्ये स्वागत',wSub:'कंत्राटदाराचा हक्काचा आणि विश्वासू डिजिटल मॅनेजर',chooseLang:'भाषा निवडा',yourName:'तुमचे / फर्मचे नाव',yourNamePh:'उदा. श्री साई कन्स्ट्रक्शन',yourPhone:'WhatsApp नंबर',phoneHelp:'अलर्ट आणि मंजुरीचे संदेश याच नंबरवर येतील. १५ दिवस मोफत ट्रायल.',start:'सुरू करा',
 hHello:'नमस्कार, {n}!',hHelloAnon:'नमस्कार!',hSub:'आज काय करायचे आहे?',stPending:'मंजुरीसाठी प्रलंबित',stExpiring:'लवकरच संपणारी कागदपत्रे',
 nHome:'होम',nSearch:'टेंडर शोध',nSearchS:'शोध',nBid:'बिड रेट',nBidS:'बिड रेट',nApprove:'सबमिशन मंजुरी',nApproveS:'मंजुरी',nVault:'कागदपत्र व्हॉल्ट',nVaultS:'व्हॉल्ट',nGst:'GST सल्ला',nProfile:'माझे प्रोफाइल',
@@ -323,6 +358,9 @@ netErr:'सर्व्हरशी संपर्क होत नाही. �
 desc_below:'SSR/अंदाजित दरापेक्षा {p}% कमी',desc_above:'SSR/अंदाजित दरापेक्षा {p}% जास्त',desc_eq:'SSR/अंदाजित दराइतका',
 },
 en:{
+sendOtp:'Send OTP',otpSent:'OTP sent by SMS to {p}',enterCode:'Enter OTP',verifyLogin:'Verify & log in',resend:'Resend OTP',changeNumber:'Change number',aboutYou:'About you',companyName:'Company / firm name',whichTenders:'Which kind of tenders do you want?',catsPh:'e.g. civil, road, building',continue:'Continue',logout:'Log out',sessionExpired:'Session expired. Please log in again.',
+chatTitle:'🤖 AI assistant',chatPh:'Type your question…',chatHello:'Hello! I can help with tenders, documents and GST. What would you like to ask?',chip1:'Which documents does a tender need?',chip2:'Which of my documents is expiring?',chip3:'What is EMD?',
+vProg:'Documents complete: {n}/{m}',missingDoc:'Not added',noFile:'No file',add:'Add',addOther:'➕ Add another document',viewTitle:'Document',download:'Download',fileLabel:'File (photo/PDF, max 5 MB)',needType:'Enter the document type.',aadhaarNote:'🔒 Documents are stored encrypted. Your Aadhaar number is not saved, only the file.',dt_aadhaar:'Aadhaar card',e413:'File too large (max 5 MB)',e415:'Only PDF, JPG, PNG or WEBP allowed',e429:'Too many attempts. Please try again later',e400:'Wrong details / OTP',delConfirm:'Remove this document?',hDocsTitle:'🗂️ My documents',hDocsSub:'{n}/{m} done — add the rest',myDocsBtn:'🗂️ Upload my documents',
 wTitle:'Welcome to TenderBot!',wSub:'Your trusted digital manager for contractors',chooseLang:'Choose language',yourName:'Your / firm name',yourNamePh:'e.g. Shri Sai Construction',yourPhone:'WhatsApp number',phoneHelp:'Alerts and approval messages will come to this number. 15-day free trial.',start:'Get started',
 hHello:'Hello, {n}!',hHelloAnon:'Hello!',hSub:'What would you like to do today?',stPending:'Pending approvals',stExpiring:'Documents expiring soon',
 nHome:'Home',nSearch:'Tender Search',nSearchS:'Search',nBid:'Bid Rate',nBidS:'Bid Rate',nApprove:'Submission Approval',nApproveS:'Approve',nVault:'Document Vault',nVaultS:'Vault',nGst:'GST Advice',nProfile:'My Profile',
@@ -371,11 +409,14 @@ function setPlan(d){planInfo=d;const b=$('#planBadge'),s=d.plan_status;
 function drawTrial(){if(!planInfo)return;const n=planInfo.trial_days_total||15,d=Math.min(planInfo.trial_day,n);
   $('#hBar').style.width=(planInfo.plan_status==='trial'?d/n*100:100)+'%';
   $('#hTrial').textContent=planInfo.plan_status==='trial'?t('trialLeft',{d,n}):planInfo.plan_status==='expired'?t('trialEnded'):(planInfo.plan_status==='vip'?t('planVip'):t('planBasic'))}
-function statusMsg(s){return s===401||s===403?t('e401'):s===404?t('e404'):s===502?t('e502'):s===503?t('e503'):t('e500',{s})}
-async function api(path,method='GET',body){
-  let r;try{r=await fetch(path,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined})}catch(e){throw new Error(t('netErr'))}
+function statusMsg(s){return s===400?t('e400'):s===401||s===403?t('e401'):s===404?t('e404'):s===413?t('e413'):s===415?t('e415'):s===429?t('e429'):s===502?t('e502'):s===503?t('e503'):t('e500',{s})}
+const tok=()=>localStorage.getItem('tb_token')||'';
+function authH(json){const h={};if(tok())h['Authorization']='Bearer '+tok();if(json)h['Content-Type']='application/json';return h}
+async function api(path,method='GET',body,form){
+  let r;try{r=await fetch(path,{method,headers:authH(!form),body:form?form:(body?JSON.stringify(body):undefined)})}catch(e){throw new Error(t('netErr'))}
   let d=null;try{d=await r.json()}catch(e){}
   if(!r.ok){const det=d&&d.detail;
+    if(r.status===401&&!path.startsWith('/auth/')){forceLogin();throw new Error(t('sessionExpired'))}
     if(r.status===402&&det&&det.message_mr){if(det.plan_status)setPlan(det);const e=new Error(det.plan_status==='basic'?t('upgradeVip'):t('paywall'));e.paywall=true;throw e}
     if(r.status===422&&Array.isArray(det))throw new Error(t('checkInputs')+': '+det.map(x=>((x.loc||[]).slice(-1)[0]||'')).filter(Boolean).join(', '));
     if(r.status===422)throw new Error(typeof det==='string'&&lang==='mr'?det:t('checkInputs'));
@@ -391,6 +432,10 @@ function wireAmounts(root){(root||document).querySelectorAll('input.amt').forEac
 const descPct=p=>p<0?t('desc_below',{p:Math.abs(p).toFixed(1)}):p>0?t('desc_above',{p:p.toFixed(1)}):t('desc_eq');
 
 /* ================= navigation / language ================= */
+const list=s=>s.split(',').map(x=>x.trim()).filter(Boolean);
+const profFrom=d=>({name:d.name,company_name:d.company_name,contractor_class:d.contractor_class,annual_turnover:d.annual_turnover,categories:d.categories||[],districts:d.districts||[]});
+const saveLocal=()=>localStorage.setItem('tb_profile',JSON.stringify(profile));
+const loggedIn=()=>!!(phone&&tok());
 function applyLang(){
   document.documentElement.lang=lang;
   document.querySelectorAll('[data-i]').forEach(e=>e.textContent=t(e.dataset.i));
@@ -400,11 +445,11 @@ function applyLang(){
   $('#hHello').textContent=profile.name?t('hHello',{n:profile.name}):t('hHelloAnon');
   if(planInfo)setPlan(planInfo);
 }
-function setLang(l){lang=l;localStorage.setItem('tb_lang',l);applyLang();['predRes','gstRes','apRes','anRes','imRes'].forEach(i=>{const e=$('#'+i);if(e)e.innerHTML=''});if(phone)go(cur,true)}
+function setLang(l){lang=l;localStorage.setItem('tb_lang',l);applyLang();['predRes','gstRes','apRes','anRes','imRes'].forEach(i=>{const e=$('#'+i);if(e)e.innerHTML=''});if(loggedIn()){renderChips();go(cur,true)}}
 function go(id,keep){
-  if(!phone&&id!=='welcome'){id='welcome'}
+  if(!loggedIn()&&id!=='welcome')id='welcome';
   cur=id;
-  document.body.classList.toggle('anon',!phone);
+  document.body.classList.toggle('anon',!loggedIn());
   document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on',s.id==='s-'+id));
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.s===id));
   if(!keep)window.scrollTo(0,0);
@@ -415,23 +460,37 @@ function go(id,keep){
   if(id==='profile')fillProfile();
 }
 
-/* ================= onboarding / home / profile ================= */
-async function startApp(btn){
-  const p=val('w_phone');if(!p){$('#wRes').innerHTML=`<div class="err">${esc(t('needPhone'))}</div>`;return}
-  await busy(btn,async()=>{try{await saveProfileData(p,val('w_name')||null,null,null,[],[]);go('home')}catch(e){fail('wRes',e)}})}
-async function saveProfileData(p,name,cls,turn,cats,dists){
-  const d=await api('/me','POST',{phone:p,name,contractor_class:cls,annual_turnover:turn,categories:cats,districts:dists});
-  phone=d.phone;profile={name:d.name,contractor_class:d.contractor_class,annual_turnover:d.annual_turnover,categories:d.categories,districts:d.districts};
-  localStorage.setItem('tb_phone',phone);localStorage.setItem('tb_profile',JSON.stringify(profile));applyLang();return d}
+/* ================= login (SMS OTP) / onboarding ================= */
+let otpPhone='';
+function wStep(n){[1,2,3].forEach(i=>$('#wStep'+i).style.display=i===n?'block':'none');$('#wRes').innerHTML=''}
+async function sendOtp(btn){
+  const p=($('#wStep1').style.display!=='none'?val('w_phone'):otpPhone)||val('w_phone');
+  if(!p){$('#wRes').innerHTML=`<div class="err">${esc(t('needPhone'))}</div>`;return}
+  await busy(btn,async()=>{try{const d=await api('/auth/send-otp','POST',{phone:p});otpPhone=d.phone;$('#otpSentTxt').textContent=t('otpSent',{p:d.phone});wStep(2);$('#w_code').value='';$('#w_code').focus()}catch(e){fail('wRes',e)}})}
+async function verifyOtp(btn){
+  const code=val('w_code');if(code.length<4)return;
+  await busy(btn,async()=>{try{const d=await api('/auth/verify-otp','POST',{phone:otpPhone,code});
+    localStorage.setItem('tb_token',d.token);phone=d.phone;localStorage.setItem('tb_phone',phone);
+    profile=profFrom(d.profile);saveLocal();setPlan(d.profile);applyLang();
+    if(!d.profile.name)wStep(3);else go('home')}catch(e){fail('wRes',e)}})}
+async function finishSetup(btn){
+  await busy(btn,async()=>{try{const d=await api('/me','POST',{name:val('w_name')||null,company_name:val('w_company')||null,categories:list(val('w_cats')),language:lang});
+    profile=profFrom(d);saveLocal();applyLang();go('home')}catch(e){fail('wRes',e)}})}
+function forceLogin(){['tb_token','tb_phone','tb_profile'].forEach(k=>localStorage.removeItem(k));phone='';profile={};planInfo=null;lastTenders=[];vaultDocs=[];chatHist=[];
+  $('#planBadge').style.display='none';wStep(1);go('welcome')}
+async function logout(){try{await api('/auth/logout','POST')}catch(e){}forceLogin()}
+
+/* ================= home / profile ================= */
 async function loadHome(){
   $('#hHello').textContent=profile.name?t('hHello',{n:profile.name}):t('hHelloAnon');
-  try{const [subs]=await Promise.all([api('/submissions?phone='+encodeURIComponent(phone))]);$('#stPending').textContent=subs.submissions.filter(s=>s.status==='PENDING').length}catch(e){$('#stPending').textContent='–'}
-  try{const v=await api('/vault/documents?phone='+encodeURIComponent(phone));vaultDocs=v.documents;$('#stExpiring').textContent=v.expiring_within_alert_window.length}catch(e){$('#stExpiring').textContent='–'}}
-function fillProfile(){$('#pf_phone').value=phone;$('#pf_name').value=profile.name||'';$('#pf_class').value=profile.contractor_class||'';$('#pf_turn').value=profile.annual_turnover??'';$('#pf_cats').value=(profile.categories||[]).join(', ');$('#pf_dists').value=(profile.districts||[]).join(', ');$('#pf_turn').dispatchEvent(new Event('input'))}
-const list=s=>s.split(',').map(x=>x.trim()).filter(Boolean);
+  try{const d=await api('/submissions');$('#stPending').textContent=d.submissions.filter(s=>s.status==='PENDING').length}catch(e){$('#stPending').textContent='–'}
+  try{const v=await api('/vault/documents');vaultDocs=v.documents;$('#stExpiring').textContent=v.expiring_within_alert_window.length;
+    const done=STD.filter(x=>v.documents.some(d=>d.doc_type===x[0]&&d.has_file)).length;
+    $('#hDocsSub').textContent=t('hDocsSub',{n:done,m:STD.length});$('#hDocsBar').style.width=(done/STD.length*100)+'%'}catch(e){$('#stExpiring').textContent='–'}}
+function fillProfile(){$('#pf_phone').value=phone;$('#pf_name').value=profile.name||'';$('#pf_company').value=profile.company_name||'';$('#pf_class').value=profile.contractor_class||'';$('#pf_turn').value=profile.annual_turnover??'';$('#pf_cats').value=(profile.categories||[]).join(', ');$('#pf_dists').value=(profile.districts||[]).join(', ');$('#pf_turn').dispatchEvent(new Event('input'))}
 async function saveProfile(btn){
-  const p=val('pf_phone');if(!p){$('#pfRes').innerHTML=`<div class="err">${esc(t('needPhone'))}</div>`;return}
-  await busy(btn,async()=>{try{await saveProfileData(p,val('pf_name')||null,val('pf_class')||null,num('pf_turn'),list(val('pf_cats')),list(val('pf_dists')));$('#pfRes').innerHTML=`<div class="info">${esc(t('saved'))}</div>`;toast(t('saved'))}catch(e){fail('pfRes',e)}})}
+  await busy(btn,async()=>{try{const d=await api('/me','POST',{name:val('pf_name')||null,company_name:val('pf_company')||null,contractor_class:val('pf_class')||null,annual_turnover:num('pf_turn'),categories:list(val('pf_cats')),districts:list(val('pf_dists')),language:lang});
+    profile=profFrom(d);saveLocal();applyLang();$('#pfRes').innerHTML=`<div class="info">${esc(t('saved'))}</div>`;toast(t('saved'))}catch(e){fail('pfRes',e)}})}
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;$('#installBtn').style.display='block'});
 function installApp(){if(deferredInstall){deferredInstall.prompt();deferredInstall=null}}
 
@@ -513,17 +572,52 @@ async function decide(id,decision){
 
 /* ================= 4. Vault ================= */
 const VSC={valid:'ok',expiring_soon:'warn',expired:'bad',no_expiry:''};
+const STD=[['Aadhaar Card','dt_aadhaar'],['PAN Card','dt_pan'],['GST Registration','dt_gst'],['PWD Registration','dt_pwd'],['Class-1 Certificate','dt_c1'],['EPF Certificate','dt_epf'],['ESIC Certificate','dt_esic'],['Labour Licence','dt_lab'],['Solvency Certificate','dt_sol'],['Turnover Certificate','dt_turn'],['ITR','dt_itr'],['Udyam Registration','dt_udyam'],['DSC','dt_dsc']];
+let vaultRows=[];
+function docRowHtml(r,i){const d=r.doc;let chip,acts;
+  if(!d){chip=`<span class="chip">${esc(t('missingDoc'))}</span>`;acts=`<button onclick="docDialog(${i})">＋ ${esc(t('add'))}</button>`}
+  else{chip=`<span class="chip ${d.has_file?(VSC[d.status]||'ok'):'warn'}">${esc(d.has_file?t('vs_'+d.status):t('noFile'))}</span>`;
+    acts=(d.has_file?`<button onclick="viewFile(${d.id})">👁</button>`:'')+`<button onclick="docDialog(${i})">⬆</button><button class="dng" onclick="delDoc(${d.id})">🗑</button>`}
+  const meta=d?[d.doc_number?t('noLabel',{n:d.doc_number}):'',d.expiry_date?t('expOn',{d:d.expiry_date})+(d.days_left!=null?' ('+t('daysLeft',{n:d.days_left})+')':''):''].filter(Boolean).join(' · '):'';
+  return `<div class="row2"><div><b>${esc(r.label)}</b>${meta?`<span class="muted">${esc(meta)}</span><br>`:''}${chip}</div><div class="docacts">${acts}</div></div>`}
 async function loadVault(silent){
-  if(!phone)return;
-  try{const d=await api('/vault/documents?phone='+encodeURIComponent(phone));vaultDocs=d.documents;if(silent)return;
-    $('#vaultList').innerHTML=d.documents.length?`<div class="card">`+d.documents.map(x=>`<div class="pr"><b>${esc(x.doc_type)}</b> <span class="chip ${VSC[x.status]||''}">${esc(t('vs_'+x.status))}</span>
-      <div class="muted">${x.doc_number?esc(t('noLabel',{n:x.doc_number}))+' · ':''}${x.expiry_date?esc(t('expOn',{d:x.expiry_date}))+(x.days_left!=null?' ('+esc(t('daysLeft',{n:x.days_left}))+')':''):''}</div>
-      ${x.file_ref?`<a href="${esc(x.file_ref)}" target="_blank" rel="noopener">${esc(t('openFile'))}</a>`:''}</div>`).join('')+`</div>`
-      :`<div class="card empty"><span class="big">🗂️</span><b>${esc(t('vaultEmpty'))}</b><div>${esc(t('vaultEmptySub'))}</div></div>`}
+  if(!loggedIn())return;
+  try{const d=await api('/vault/documents');vaultDocs=d.documents;if(silent)return;
+    const std=STD.map(([ty,key])=>({ty,label:t(key),doc:d.documents.find(x=>x.doc_type===ty)||null}));
+    const extra=d.documents.filter(x=>!STD.some(s=>s[0]===x.doc_type)).map(x=>({ty:x.doc_type,label:x.doc_type,doc:x}));
+    vaultRows=std.concat(extra);
+    const done=std.filter(r=>r.doc&&r.doc.has_file).length;
+    $('#vProg').textContent=t('vProg',{n:done,m:STD.length});$('#vBar').style.width=(done/STD.length*100)+'%';
+    $('#vaultList').innerHTML='<div class="card">'+vaultRows.map(docRowHtml).join('')+'</div>'}
   catch(e){if(!silent)fail('vaultList',e)}}
-async function addDoc(btn){if(!needPhone())return;
-  await busy(btn,async()=>{try{await api('/vault/documents','POST',{phone,doc_type:val('vd_other')||val('vd_type'),doc_number:val('vd_num')||null,expiry_date:val('vd_exp')||null,file_ref:val('vd_ref')||null});
-    toast(t('docAdded'));['vd_other','vd_num','vd_exp','vd_ref'].forEach(i=>$('#'+i).value='');loadVault()}catch(e){toast(e.message)}})}
+function docDialog(i){
+  const r=i>=0?vaultRows[i]:{ty:'',label:'',doc:null};const d=r.doc,aad=r.ty==='Aadhaar Card';
+  $('#dlg').innerHTML=`<h2 style="margin-top:0">${esc(r.label||t('addOther'))}</h2>
+   ${i<0?`<label>${esc(t('docOther'))}</label><input id="dd_type">`:''}
+   ${aad?`<div class="info">${esc(t('aadhaarNote'))}</div>`:`<label>${esc(t('docNo'))}</label><input id="dd_num" value="${esc(d?d.doc_number||'':'')}">`}
+   <label>${esc(t('docExp'))}</label><input id="dd_exp" type="date" value="${esc(d&&d.expiry_date||'')}">
+   <label>${esc(t('fileLabel'))}</label><input id="dd_file" type="file" accept="image/*,application/pdf">
+   <button class="btn" id="dd_go">${esc(t('save'))}</button><button class="btn sec" onclick="$('#dlg').close()">${esc(t('close'))}</button><div id="ddRes"></div>`;
+  $('#dlg').showModal();$('#dd_go').onclick=()=>busy($('#dd_go'),()=>saveDoc(r,i,aad))}
+async function saveDoc(r,i,aad){
+  const f=$('#dd_file').files[0];
+  if(f&&f.size>5*1024*1024){$('#ddRes').innerHTML=`<div class="err">${esc(t('e413'))}</div>`;return}
+  const type=i<0?val('dd_type'):r.ty;if(!type){$('#ddRes').innerHTML=`<div class="err">${esc(t('needType'))}</div>`;return}
+  try{let id=r.doc?r.doc.id:null;const num=aad?null:(val('dd_num')||null),exp=val('dd_exp')||null;
+    if(id)await api('/vault/documents/'+id,'PATCH',{doc_number:num,expiry_date:exp});
+    else{const c=await api('/vault/documents','POST',{phone,doc_type:type,doc_number:num,expiry_date:exp,file_ref:null});id=c.id}
+    if(f){const fd=new FormData();fd.append('file',f);await api('/vault/documents/'+id+'/file','POST',null,fd)}
+    $('#dlg').close();toast(t('docAdded'));loadVault()}
+  catch(e){fail('ddRes',e);loadVault()}}
+async function viewFile(id){
+  try{const r=await fetch('/vault/documents/'+id+'/file',{headers:authH(false)});
+    if(r.status===401){forceLogin();return}
+    if(!r.ok){toast(statusMsg(r.status));return}
+    const b=await r.blob(),u=URL.createObjectURL(b),pdf=b.type==='application/pdf';
+    $('#dlg').innerHTML=`<h2 style="margin-top:0">${esc(t('viewTitle'))}</h2>${pdf?`<iframe src="${u}" style="width:100%;height:66vh;border:0"></iframe>`:`<img src="${u}" style="width:100%;border-radius:12px">`}
+     <a class="btn sec" style="display:block;text-align:center;text-decoration:none" href="${u}" download>${esc(t('download'))}</a><button class="btn sec" onclick="$('#dlg').close()">${esc(t('close'))}</button>`;
+    $('#dlg').showModal()}catch(e){toast(e.message)}}
+async function delDoc(id){if(!confirm(t('delConfirm')))return;try{await api('/vault/documents/'+id,'DELETE');loadVault()}catch(e){toast(e.message)}}
 
 /* ================= 5. GST ================= */
 function addPurchase(){const d=document.createElement('div');d.className='pr';
@@ -543,10 +637,26 @@ async function runGst(btn){if(!needPhone())return;
       if(navigator.share)navigator.share({text}).catch(()=>{});else{navigator.clipboard.writeText(text);toast(t('copied'))}}}
   catch(e){fail('gstRes',e)}})}
 
+/* ================= AI chat ================= */
+let chatHist=[];
+const fmt=x=>esc(x).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\n/g,'<br>');
+function drawChat(typing){
+  $('#chatLog').innerHTML=`<div class="msg bot">${fmt(t('chatHello'))}</div>`+chatHist.map(m=>`<div class="msg ${m.role==='user'?'me':'bot'}">${fmt(m.content)}</div>`).join('')+(typing?'<div class="msg bot">…</div>':'');
+  const l=$('#chatLog');l.scrollTop=l.scrollHeight}
+function renderChips(){$('#chatChips').innerHTML=['chip1','chip2','chip3'].map(k=>`<button onclick="sendChat(t('${k}'))">${esc(t(k))}</button>`).join('')}
+function openChat(){$('#chatDlg').showModal();drawChat();renderChips();$('#chatIn').placeholder=t('chatPh')}
+async function sendChat(text){
+  text=(text||$('#chatIn').value).trim();if(!text)return;$('#chatIn').value='';
+  const hist=chatHist.filter(m=>!m.err).slice(-10).map(m=>({role:m.role,content:m.content}));
+  chatHist.push({role:'user',content:text});drawChat(true);
+  try{const d=await api('/chat','POST',{phone,message:text,history:hist,language:lang});chatHist.push({role:'assistant',content:d.reply})}
+  catch(e){chatHist.push({role:'assistant',content:'⚠️ '+e.message,err:true})}
+  drawChat()}
+
 /* ================= start ================= */
 if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
 wireAmounts();addPurchase();applyLang();
-if(phone){api('/me?phone='+encodeURIComponent(phone)).then(d=>{profile={name:d.name,contractor_class:d.contractor_class,annual_turnover:d.annual_turnover,categories:d.categories,districts:d.districts};localStorage.setItem('tb_profile',JSON.stringify(profile));applyLang()}).catch(()=>{});go('home')}
-else go('welcome');
+if(loggedIn()){api('/me').then(d=>{profile=profFrom(d);saveLocal();applyLang()}).catch(()=>{});go('home')}
+else{if(phone)$('#w_phone').value=phone;go('welcome')}
 </script></body></html>
 """

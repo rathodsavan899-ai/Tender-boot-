@@ -25,6 +25,33 @@ def _client() -> Client:
     return Client(s.twilio_account_sid, s.twilio_auth_token)
 
 
+def send_otp(phone: str) -> dict:
+    """Send an SMS OTP with Twilio Verify. Returns {"sent": bool, "error": str | None}."""
+    s = get_settings()
+    if not s.verify_configured:
+        return {"sent": False, "error": "not_configured"}
+    try:
+        _client().verify.v2.services(s.twilio_verify_service_sid).verifications.create(
+            to=normalize_phone(phone), channel="sms")
+        return {"sent": True, "error": None}
+    except Exception as exc:
+        logger.error("OTP send failed: %s", exc)
+        return {"sent": False, "error": str(exc)}
+
+
+def check_otp(phone: str, code: str) -> bool:
+    s = get_settings()
+    if not s.verify_configured:
+        return False
+    try:
+        result = _client().verify.v2.services(s.twilio_verify_service_sid).verification_checks.create(
+            to=normalize_phone(phone), code=code.strip())
+        return result.status == "approved"
+    except Exception as exc:
+        logger.warning("OTP check failed: %s", exc)
+        return False
+
+
 def parse_decision(body: str | None) -> str | None:
     """Map a reply to 'YES' / 'NO' / None."""
     text = re.sub(r"[^\w\s]", "", (body or "").strip().lower())

@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     twilio_approval_content_sid: str = ""
     validate_twilio_signature: bool = False
 
+    twilio_verify_service_sid: str = ""
+    require_auth: bool = True
+    session_days: int = 30
+    otp_sends_per_hour: int = 5
+    file_encryption_secret: str = ""
+    max_upload_mb: int = 5
+    chat_messages_per_hour: int = 40
+
     trial_days: int = 15
     basic_price: int = 999
     vip_price: int = 5000
@@ -36,6 +44,10 @@ class Settings(BaseSettings):
 
     submission_webhook_url: str = ""
     allowed_scrape_hosts: str = "mahatenders.gov.in,eprocure.gov.in,etenders.gov.in"
+
+    @property
+    def verify_configured(self) -> bool:
+        return bool(self.twilio_account_sid and self.twilio_auth_token and self.twilio_verify_service_sid)
 
     @property
     def twilio_configured(self) -> bool:

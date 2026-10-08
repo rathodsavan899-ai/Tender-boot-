@@ -12,6 +12,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -68,6 +69,8 @@ class Contractor(Base):
     categories: Mapped[list] = mapped_column(JSON, default=list)
     districts: Mapped[list] = mapped_column(JSON, default=list)
     annual_turnover: Mapped[float | None] = mapped_column(Float, nullable=True)
+    company_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     plan: Mapped[str] = mapped_column(String(10), default="none")  # none | basic | vip
     plan_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     trial_started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -156,6 +159,33 @@ class VaultDocument(Base):
     contractor: Mapped[Contractor] = relationship(back_populates="documents")
 
 
+class VaultFile(Base):
+    """Encrypted uploaded file for a vault document (Fernet; key derived from FILE_ENCRYPTION_SECRET)."""
+
+    __tablename__ = "vault_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contractor_id: Mapped[int] = mapped_column(ForeignKey("contractors.id"), index=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("vault_documents.id"), unique=True, index=True)
+    filename: Mapped[str] = mapped_column(String(150))
+    content_type: Mapped[str] = mapped_column(String(50))
+    size: Mapped[int] = mapped_column(Integer)
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class AuthSession(Base):
+    """Login session created after OTP verification. Only a SHA-256 hash of the token is stored."""
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    phone: Mapped[str] = mapped_column(String(20), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class PaymentBill(Base):
     __tablename__ = "payment_bills"
 
@@ -192,7 +222,7 @@ class Submission(Base):
 
 # ---------------------------------------------------------------- access rules
 ALWAYS_OPEN_FEATURES = {"analyze", "tax_draft"}
-BASIC_FEATURES = ALWAYS_OPEN_FEATURES | {"alerts", "vault", "tax_export"}
+BASIC_FEATURES = ALWAYS_OPEN_FEATURES | {"alerts", "vault", "tax_export", "chat"}
 # VIP-only (also locked after trial without a plan): predict_bid, submit, voice, bg_emd,
 # marketplace, payment_notice
 
@@ -211,6 +241,18 @@ def check_access(contractor: Contractor, feature: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------- helpers
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()
+
+
+def _ensure_columns() -> None:
+    """create_all never alters existing tables; add the columns introduced after the first release."""
+    from sqlalchemy import inspect, text
+
+    existing = {c["name"] for c in inspect(engine).get_columns("contractors")}
+    with engine.begin() as conn:
+        for name, ddl in (("company_name", "VARCHAR(200)"), ("language", "VARCHAR(10)")):
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE contractors ADD COLUMN {name} {ddl}"))
 
 
 def get_db() -> Iterator[Session]:

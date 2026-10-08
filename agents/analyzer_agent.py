@@ -6,6 +6,7 @@ import re
 from agents import format_inr, llm_json
 
 ALIAS_TOKENS: dict[str, set[str]] = {
+    "aadhaar": {"aadhaar", "aadhar", "uidai"},
     "gst": {"gst", "gstin"},
     "pan": {"pan"},
     "epf": {"epf", "pf", "provident"},

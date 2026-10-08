@@ -4,20 +4,24 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import secrets
+import time
 from contextlib import asynccontextmanager
-from datetime import date
+from contextvars import ContextVar
+from datetime import date, timedelta
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
 
 from agents import LLMUnavailable, format_inr, llm_available
-from agents import (analyzer_agent, bg_emd_agent, communication_agent, competitor_agent, marketplace_agent,
+from agents import (analyzer_agent, bg_emd_agent, chat_agent, communication_agent, competitor_agent, marketplace_agent,
                     payment_delay_agent, scraper_agent, tax_agent, vault_agent)
 from config import get_settings
 from pwa import router as pwa_router
-from database import (Contractor, PaymentBill, SessionLocal, Submission, Tender, check_access, get_db,
+from database import (AuthSession, Contractor, VaultDocument, PaymentBill, SessionLocal, Submission, Tender, check_access, get_db,
                       get_or_create_contractor, init_db, normalize_phone, utcnow)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -49,6 +53,52 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
 app.include_router(pwa_router)
+
+current_phone: ContextVar[str | None] = ContextVar("current_phone", default=None)
+_hits: dict[str, list[float]] = {}
+
+
+def rate_ok(key: str, limit: int, window: float = 3600.0) -> bool:
+    """Simple in-memory sliding-window limiter (single instance)."""
+    now = time.time()
+    recent = [t for t in _hits.get(key, []) if now - t < window]
+    if len(recent) >= limit:
+        _hits[key] = recent
+        return False
+    recent.append(now)
+    _hits[key] = recent
+    return True
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _lookup_session(token: str) -> str | None:
+    with SessionLocal() as db:
+        row = db.scalar(select(AuthSession).where(AuthSession.token_hash == _token_hash(token),
+                                                  AuthSession.expires_at > utcnow()))
+        return row.phone if row else None
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    header = request.headers.get("authorization", "")
+    phone = None
+    if header.lower().startswith("bearer ") and header[7:].strip():
+        phone = await run_in_threadpool(_lookup_session, header[7:].strip())
+    marker = current_phone.set(phone)
+    try:
+        return await call_next(request)
+    finally:
+        current_phone.reset(marker)
+
+
+def require_login() -> str:
+    phone = current_phone.get()
+    if settings.require_auth and not phone:
+        raise HTTPException(401, "लॉगिन आवश्यक आहे")
+    return phone or ""
 
 
 # ------------------------------------------------------------------ schemas (Pydantic v2)
@@ -150,6 +200,34 @@ class EmdKitRequest(BaseModel):
     send_whatsapp: bool = True
 
 
+class OtpSend(BaseModel):
+    phone: str
+
+
+class OtpVerify(BaseModel):
+    phone: str
+    code: str = Field(min_length=4, max_length=8)
+
+
+class ChatMsg(BaseModel):
+    role: str
+    content: str = Field(max_length=4000)
+
+
+class ChatIn(BaseModel):
+    phone: str = ""
+    message: str = Field(min_length=1, max_length=2000)
+    history: list[ChatMsg] = Field(default_factory=list, max_length=20)
+    language: str = Field(default="mr", max_length=20)
+
+
+class VaultDocUpdate(BaseModel):
+    phone: str = ""
+    doc_number: str | None = None
+    expiry_date: date | None = None
+    file_ref: str | None = None
+
+
 class VaultDocIn(BaseModel):
     phone: str
     doc_type: str
@@ -203,8 +281,10 @@ class TenderIn(BaseModel):
 
 
 class ProfileIn(BaseModel):
-    phone: str
+    phone: str = ""
     name: str | None = None
+    company_name: str | None = None
+    language: str | None = Field(default=None, max_length=10)
     contractor_class: str | None = None
     categories: list[str] = Field(default_factory=list)
     districts: list[str] = Field(default_factory=list)
@@ -225,6 +305,11 @@ def require_admin(x_admin_key: str | None = Header(default=None)) -> None:
 
 
 def contractor_for(db: Session, phone: str, **profile) -> Contractor:
+    """The logged-in contractor. When REQUIRE_AUTH is on, the phone always comes from the session token."""
+    if settings.require_auth:
+        phone = current_phone.get() or ""
+        if not phone:
+            raise HTTPException(401, "लॉगिन आवश्यक आहे")
     try:
         return get_or_create_contractor(db, phone, **profile)
     except ValueError as exc:
@@ -438,9 +523,10 @@ async def voice_response(submission_id: int, request: Request, db: Session = Dep
 
 
 @app.get("/submissions/{submission_id}")
-def submission_status(submission_id: int, db: Session = Depends(get_db)) -> dict:
+def submission_status(submission_id: int, phone: str = "", db: Session = Depends(get_db)) -> dict:
+    contractor = contractor_for(db, phone)
     s = db.get(Submission, submission_id)
-    if s is None:
+    if s is None or s.contractor_id != contractor.id:
         raise HTTPException(404, "सबमिशन सापडले नाही")
     return {"id": s.id, "tender_ref": s.tender_ref, "bid_amount": s.bid_amount, "status": s.status,
             "detail": s.status_detail, "channel": s.decision_channel}
@@ -503,7 +589,7 @@ def generate_emd_kit(req: EmdKitRequest, db: Session = Depends(get_db)) -> dict:
 
 
 @app.get("/marketplace/search")
-def marketplace_search(phone: str, category: str, district: str | None = None, db: Session = Depends(get_db)) -> dict:
+def marketplace_search(category: str, phone: str = "", district: str | None = None, db: Session = Depends(get_db)) -> dict:
     contractor = contractor_for(db, phone)
     gate(contractor, "marketplace")
     return marketplace_agent.search_vendors(db, category, district)
@@ -518,15 +604,152 @@ def vault_add(req: VaultDocIn, db: Session = Depends(get_db)) -> dict:
 
 
 @app.get("/vault/documents")
-def vault_list(phone: str, db: Session = Depends(get_db)) -> dict:
+def vault_list(phone: str = "", db: Session = Depends(get_db)) -> dict:
     contractor = contractor_for(db, phone)
     gate(contractor, "vault")
     return {"documents": vault_agent.list_documents(db, contractor),
             "expiring_within_alert_window": vault_agent.expiring_documents(db, contractor)}
 
 
+def _own_doc(db: Session, contractor: Contractor, doc_id: int) -> VaultDocument:
+    doc = db.get(VaultDocument, doc_id)
+    if doc is None or doc.contractor_id != contractor.id:
+        raise HTTPException(404, "कागदपत्र सापडले नाही")
+    return doc
+
+
+@app.patch("/vault/documents/{doc_id}")
+def vault_update(doc_id: int, req: VaultDocUpdate, db: Session = Depends(get_db)) -> dict:
+    contractor = contractor_for(db, req.phone)
+    gate(contractor, "vault")
+    doc = _own_doc(db, contractor, doc_id)
+    if "doc_number" in req.model_fields_set and not vault_agent.is_aadhaar(doc.doc_type):
+        doc.doc_number = req.doc_number
+    if "expiry_date" in req.model_fields_set:
+        doc.expiry_date = req.expiry_date
+        doc.last_alert_on = None
+    if "file_ref" in req.model_fields_set:
+        doc.file_ref = req.file_ref
+    db.commit()
+    return vault_agent.serialize(doc)
+
+
+@app.delete("/vault/documents/{doc_id}")
+def vault_delete(doc_id: int, phone: str = "", db: Session = Depends(get_db)) -> dict:
+    contractor = contractor_for(db, phone)
+    gate(contractor, "vault")
+    vault_agent.delete_document(db, _own_doc(db, contractor, doc_id))
+    return {"deleted": True}
+
+
+@app.post("/vault/documents/{doc_id}/file")
+async def vault_upload(doc_id: int, file: UploadFile = File(...), phone: str = "",
+                       db: Session = Depends(get_db)) -> dict:
+    data = await file.read(settings.max_upload_mb * 1024 * 1024 + 1)
+    filename = file.filename or "file"
+
+    def work() -> dict:
+        contractor = contractor_for(db, phone)
+        gate(contractor, "vault")
+        doc = _own_doc(db, contractor, doc_id)
+        try:
+            row = vault_agent.save_file(db, contractor, doc, filename, data)
+        except vault_agent.FileStorageDisabled:
+            raise HTTPException(503, "फाइल अपलोड सध्या बंद आहे (सर्व्हरवर FILE_ENCRYPTION_SECRET सेट करा).")
+        except vault_agent.InvalidFile as exc:
+            reason = str(exc)
+            if reason == "too_big":
+                raise HTTPException(413, f"फाइल खूप मोठी आहे (कमाल {settings.max_upload_mb} MB).")
+            if reason == "bad_type":
+                raise HTTPException(415, "फक्त PDF, JPG, PNG किंवा WEBP फाइल चालते.")
+            raise HTTPException(422, "फाइल रिकामी आहे.")
+        return {"document_id": doc.id, "file_name": row.filename, "file_size": row.size}
+
+    return await run_in_threadpool(work)
+
+
+@app.get("/vault/documents/{doc_id}/file")
+def vault_download(doc_id: int, phone: str = "", db: Session = Depends(get_db)) -> Response:
+    contractor = contractor_for(db, phone)
+    gate(contractor, "vault")
+    doc = _own_doc(db, contractor, doc_id)
+    try:
+        loaded = vault_agent.load_file(db, doc)
+    except vault_agent.FileStorageDisabled:
+        raise HTTPException(503, "फाइल उघडता आली नाही.")
+    if loaded is None:
+        raise HTTPException(404, "फाइल अपलोड केलेली नाही.")
+    data, content_type, filename = loaded
+    safe = filename.encode("ascii", "ignore").decode() or "file"
+    return Response(content=data, media_type=content_type,
+                    headers={"Content-Disposition": f'inline; filename="{safe}"',
+                             "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
+# ------------------------------------------------------------------ auth (SMS OTP) + AI chat
+@app.post("/auth/send-otp")
+def auth_send_otp(req: OtpSend) -> dict:
+    try:
+        phone = normalize_phone(req.phone)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    if not settings.verify_configured:
+        raise HTTPException(503, "OTP सेवा सेट केलेली नाही (TWILIO_VERIFY_SERVICE_SID).")
+    if not rate_ok("otp:" + phone, settings.otp_sends_per_hour):
+        raise HTTPException(429, "खूप प्रयत्न झाले. थोड्या वेळाने पुन्हा करा.")
+    if not communication_agent.send_otp(phone)["sent"]:
+        raise HTTPException(502, "OTP पाठवता आला नाही. नंबर तपासा.")
+    return {"sent": True, "phone": phone}
+
+
+@app.post("/auth/verify-otp")
+def auth_verify_otp(req: OtpVerify, db: Session = Depends(get_db)) -> dict:
+    try:
+        phone = normalize_phone(req.phone)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    if not rate_ok("verify:" + phone, 10):
+        raise HTTPException(429, "खूप प्रयत्न झाले. थोड्या वेळाने पुन्हा करा.")
+    if not communication_agent.check_otp(phone, req.code):
+        raise HTTPException(400, "OTP चुकीचा किंवा संपलेला आहे.")
+    contractor = get_or_create_contractor(db, phone)
+    token = secrets.token_urlsafe(32)
+    db.add(AuthSession(token_hash=_token_hash(token), phone=phone,
+                       expires_at=utcnow() + timedelta(days=settings.session_days)))
+    db.commit()
+    return {"token": token, "phone": phone, "session_days": settings.session_days, "profile": _profile_view(contractor)}
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request, db: Session = Depends(get_db)) -> dict:
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        row = db.scalar(select(AuthSession).where(AuthSession.token_hash == _token_hash(header[7:].strip())))
+        if row:
+            db.delete(row)
+            db.commit()
+    return {"ok": True}
+
+
+@app.post("/chat")
+def chat(req: ChatIn, db: Session = Depends(get_db)) -> dict:
+    contractor = contractor_for(db, req.phone)
+    gate(contractor, "chat")
+    if not llm_available():
+        raise HTTPException(503, "AI चॅटसाठी OPENAI_API_KEY आवश्यक आहे.")
+    if not rate_ok("chat:" + contractor.phone, settings.chat_messages_per_hour):
+        raise HTTPException(429, "आजचे चॅट संदेश संपले. थोड्या वेळाने पुन्हा करा.")
+    try:
+        reply = chat_agent.answer(db, contractor, req.message, [m.model_dump() for m in req.history], req.language)
+    except Exception:
+        logger.exception("chat failed")
+        raise HTTPException(502, "AI उत्तर देऊ शकला नाही. पुन्हा प्रयत्न करा.")
+    return {"reply": reply, **plan_info(contractor)}
+
+
 @app.post("/discover-tenders")
 def discover_tenders(req: DiscoverRequest, db: Session = Depends(get_db)) -> dict:
+    require_login()
     try:
         rows = scraper_agent.discover_active_tenders(req.url)
     except ValueError as exc:
@@ -595,24 +818,26 @@ def tenders_upsert(req: TenderIn, db: Session = Depends(get_db)) -> dict:
 
 
 def _profile_view(c: Contractor) -> dict:
-    return {"phone": c.phone, "name": c.name, "contractor_class": c.contractor_class, "categories": c.categories or [],
+    return {"phone": c.phone, "name": c.name, "company_name": c.company_name, "language": c.language,
+            "contractor_class": c.contractor_class, "categories": c.categories or [],
             "districts": c.districts or [], "annual_turnover": c.annual_turnover, **plan_info(c)}
 
 
 @app.get("/me")
-def me_get(phone: str, db: Session = Depends(get_db)) -> dict:
+def me_get(phone: str = "", db: Session = Depends(get_db)) -> dict:
     return _profile_view(contractor_for(db, phone))
 
 
 @app.post("/me")
 def me_save(req: ProfileIn, db: Session = Depends(get_db)) -> dict:
-    return _profile_view(contractor_for(db, req.phone, name=req.name, contractor_class=req.contractor_class,
+    return _profile_view(contractor_for(db, req.phone, name=req.name, company_name=req.company_name,
+                                        language=req.language, contractor_class=req.contractor_class,
                                         categories=req.categories, districts=req.districts,
                                         annual_turnover=req.annual_turnover))
 
 
 @app.get("/submissions")
-def submissions_list(phone: str, db: Session = Depends(get_db)) -> dict:
+def submissions_list(phone: str = "", db: Session = Depends(get_db)) -> dict:
     contractor = contractor_for(db, phone)
     rows = db.scalars(select(Submission).where(Submission.contractor_id == contractor.id)
                       .order_by(Submission.created_at.desc()).limit(30))
@@ -654,8 +879,10 @@ def admin_add_vendor(req: VendorIn, db: Session = Depends(get_db)) -> dict:
 
 @app.post("/admin/set-plan", dependencies=[Depends(require_admin)])
 def admin_set_plan(req: SetPlanRequest, db: Session = Depends(get_db)) -> dict:
-    from datetime import timedelta
-    contractor = contractor_for(db, req.phone)
+    try:
+        contractor = get_or_create_contractor(db, req.phone)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     contractor.plan = req.plan
     contractor.plan_expires_at = utcnow() + timedelta(days=req.days) if req.plan != "none" else None
     db.commit()

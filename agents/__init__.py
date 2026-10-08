@@ -18,7 +18,7 @@ def llm_available() -> bool:
     return bool(get_settings().openai_api_key.strip())
 
 
-def _chat(json_mode: bool):
+def _chat(json_mode: bool, temperature: float = 0):
     if not llm_available():
         raise LLMUnavailable("OPENAI_API_KEY सेट केलेली नाही.")
     from langchain_openai import ChatOpenAI
@@ -27,7 +27,7 @@ def _chat(json_mode: bool):
     llm = ChatOpenAI(
         model=settings.openai_model,
         api_key=settings.openai_api_key,
-        temperature=0,
+        temperature=temperature,
         timeout=60,
         max_retries=2,
     )
@@ -39,6 +39,11 @@ def llm_text(system: str, user: str) -> str:
 
     response = _chat(False).invoke([SystemMessage(content=system), HumanMessage(content=user)])
     return str(response.content).strip()
+
+
+def llm_messages(messages: list, temperature: float = 0.3) -> str:
+    """Invoke GPT-4o with a prepared list of LangChain messages (multi-turn chat)."""
+    return str(_chat(False, temperature).invoke(messages).content).strip()
 
 
 def llm_json(system: str, user: str) -> dict:
