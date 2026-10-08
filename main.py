@@ -246,19 +246,20 @@ def plan_info(contractor: Contractor) -> dict:
 def apply_decision(db: Session, submission: Submission, decision: str, channel: str) -> dict:
     """Execute (YES) or cancel (NO) a pending submission. Idempotent for already-decided submissions."""
     if submission.status != "PENDING":
-        return {"status": submission.status, "message_mr": "या सबमिशनवर आधीच निर्णय झाला आहे.", "already_decided": True}
+        return {"status": submission.status, "message_mr": "या सबमिशनवर आधीच निर्णय झाला आहे.", "message_en": "A decision has already been made on this submission.", "already_decided": True}
     submission.decision_channel = channel
     submission.decided_at = utcnow()
     if decision == "NO":
         submission.status, submission.status_detail = "CANCELLED", "कंत्राटदाराने रद्द केले."
         message = "ठीक आहे भाऊ, टेंडर सबमिशन रद्द केले आहे."
+        message_en = "OK, the tender submission has been cancelled."
     else:
         contractor = db.get(Contractor, submission.contractor_id)
         allowed, block_msg = check_access(contractor, "submit")
         if not allowed:
             submission.status, submission.status_detail = "CANCELLED", "प्लॅन/ट्रायलमुळे ब्लॉक."
             db.commit()
-            return {"status": "CANCELLED", "message_mr": block_msg, "already_decided": False}
+            return {"status": "CANCELLED", "message_mr": block_msg, "message_en": "Your plan is not active, so submission is blocked.", "already_decided": False}
         submission.status, submission.status_detail = communication_agent.dispatch_submission(submission)
         message = {
             "SUBMITTED": f"✅ भाऊ, {format_inr(submission.bid_amount)} चे टेंडर सबमिट झाले आहे.",
@@ -266,8 +267,14 @@ def apply_decision(db: Session, submission: Submission, decision: str, channel: 
                 f"👍 मंजुरी नोंदवली ({format_inr(submission.bid_amount)}). पोर्टलवर DSC ने सबमिशन अजून बाकी आहे — अजून सबमिट झालेले नाही."),
             "APPROVED_SUBMISSION_FAILED": "⚠️ मंजुरी नोंदवली, पण सबमिशन सेवा अयशस्वी झाली. टेंडर अजून सबमिट झालेले नाही.",
         }[submission.status]
+        message_en = {
+            "SUBMITTED": f"✅ The {format_inr(submission.bid_amount)} tender has been submitted.",
+            "APPROVED_AWAITING_PORTAL_SUBMISSION": f"👍 Approval recorded ({format_inr(submission.bid_amount)}). Submission on the portal with your DSC is still pending — NOT yet submitted.",
+            "APPROVED_SUBMISSION_FAILED": "⚠️ Approval recorded, but the submission service failed. The tender is NOT yet submitted.",
+        }[submission.status]
     db.commit()
-    return {"status": submission.status, "message_mr": message, "detail": submission.status_detail, "already_decided": False}
+    return {"status": submission.status, "message_mr": message, "message_en": message_en,
+            "detail": submission.status_detail, "already_decided": False}
 
 
 def xml(content: str) -> Response:

@@ -10,6 +10,16 @@ DISCLAIMER_MR = (
     "कामाच्या प्रकारानुसार GST दर वेगळा असू शकतो."
 )
 
+DISCLAIMER_EN = ("These figures are estimates based on the information you entered. Confirm with your CA before filing returns. "
+                 "The GST rate can differ by type of work.")
+
+GENERAL_STRATEGIES_EN = [
+    "Claim ITC only on valid tax invoices that appear in GSTR-2B; check that your supplier has filed their return.",
+    "Make sure every purchase bill carries your GSTIN and the correct HSN/SAC so ITC is not rejected.",
+    "File GSTR-1 and GSTR-3B on time; late filing can attract penalty and interest.",
+    "GST TDS deducted by a government department is credited to your electronic cash ledger; use it against later liability.",
+]
+
 GENERAL_STRATEGIES_MR = [
     "ITC फक्त वैध टॅक्स इन्व्हॉइस आणि GSTR-2B मध्ये दिसणाऱ्या खरेदीवरच क्लेम करा; पुरवठादाराने रिटर्न भरले आहे का ते तपासा.",
     "प्रत्येक खरेदी बिलावर तुमचा GSTIN आणि योग्य HSN/SAC आहे याची खात्री करा, म्हणजे ITC नाकारला जाणार नाही.",
@@ -58,25 +68,26 @@ def compute(taxable_value: float, gst_rate_percent: float, intra_state: bool,
         receipt = r2(invoice_total - amount)
         tds["cash_payable_after_tds_credit"] = max(r2(payable - amount), 0.0)
 
-    breakdown = [
-        {"particular": "करपात्र मूल्य (Taxable Value)", "amount": r2(taxable_value)},
-        {"particular": f"आउटपुट GST @ {gst_rate_percent:g}%", "amount": output_total},
+    rows = [
+        ("करपात्र मूल्य (Taxable Value)", "Taxable value", r2(taxable_value)),
+        (f"आउटपुट GST @ {gst_rate_percent:g}%", f"Output GST @ {gst_rate_percent:g}%", output_total),
     ]
     if intra_state:
-        breakdown += [{"particular": "  CGST", "amount": output["cgst"]}, {"particular": "  SGST", "amount": output["sgst"]}]
+        rows += [("  CGST", "  CGST", output["cgst"]), ("  SGST", "  SGST", output["sgst"])]
     else:
-        breakdown.append({"particular": "  IGST", "amount": output["igst"]})
-    breakdown += [
-        {"particular": "एकूण इन्व्हॉइस मूल्य", "amount": invoice_total},
-        {"particular": "पात्र ITC (वजा)", "amount": eligible_total},
-        {"particular": "ब्लॉक/अपात्र ITC (क्लेम नाही)", "amount": blocked_total},
-        {"particular": "निव्वळ GST देय", "amount": payable},
+        rows.append(("  IGST", "  IGST", output["igst"]))
+    rows += [
+        ("एकूण इन्व्हॉइस मूल्य", "Total invoice value", invoice_total),
+        ("पात्र ITC (वजा)", "Eligible ITC (less)", eligible_total),
+        ("ब्लॉक/अपात्र ITC (क्लेम नाही)", "Blocked / ineligible ITC (not claimed)", blocked_total),
+        ("निव्वळ GST देय", "Net GST payable", payable),
     ]
     if carry_forward:
-        breakdown.append({"particular": "पुढे नेता येणारा ITC (क्रेडिट शिल्लक)", "amount": carry_forward})
+        rows.append(("पुढे नेता येणारा ITC (क्रेडिट शिल्लक)", "ITC balance to carry forward", carry_forward))
     if tds:
-        breakdown += [{"particular": "GST TDS (विभागाकडून कपात)", "amount": tds["amount"]},
-                      {"particular": "प्रत्यक्ष मिळणारी रक्कम", "amount": receipt}]
+        rows += [("GST TDS (विभागाकडून कपात)", "GST TDS (deducted by department)", tds["amount"]),
+                 ("प्रत्यक्ष मिळणारी रक्कम", "Amount actually received", receipt)]
+    breakdown = [{"particular": mr, "particular_en": en, "amount": amt} for mr, en, amt in rows]
 
     result = {
         "inputs": {"taxable_value": r2(taxable_value), "gst_rate_percent": gst_rate_percent,
@@ -93,7 +104,15 @@ def compute(taxable_value: float, gst_rate_percent: float, intra_state: bool,
         f"निव्वळ GST देय {format_inr(payable)}."
         + (f" ITC शिल्लक {format_inr(carry_forward)} पुढे नेता येईल." if carry_forward else "")
     )
+    result["summary_en"] = (
+        f"Output GST {format_inr(output_total)}, eligible ITC {format_inr(eligible_total)}, "
+        f"net GST payable {format_inr(payable)}."
+        + (f" ITC balance {format_inr(carry_forward)} can be carried forward." if carry_forward else "")
+    )
     result["strategies_mr"] = _strategies(result)
+    result["strategies_en"] = (["Part of the ITC is treated as ineligible; ask your CA to re-check eligibility of those purchases."]
+                               if blocked_total > 0 else []) + GENERAL_STRATEGIES_EN
+    result["disclaimer_en"] = DISCLAIMER_EN
     return result
 
 

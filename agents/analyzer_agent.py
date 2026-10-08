@@ -82,25 +82,30 @@ def gap_analysis(required_documents: list[str], documents_held: list[str], contr
             missing.append(doc)
 
     issues: list[str] = []
+    issues_en: list[str] = []
     unverified: list[str] = []
+    unverified_en: list[str] = []
 
     required_class = parse_class(minimum_class)
     if minimum_class:
         have = parse_class(contractor_class)
         if required_class is None:
             unverified.append(f"किमान वर्ग '{minimum_class}' नीट समजला नाही — निविदा तपासा.")
+            unverified_en.append(f"Could not understand the minimum class '{minimum_class}' — check the tender.")
         elif have is None:
             unverified.append(f"किमान वर्ग {minimum_class} आवश्यक आहे; तुमचा वर्ग प्रोफाइलमध्ये नाही.")
+            unverified_en.append(f"Minimum class {minimum_class} is required; your class is not in your profile.")
         elif have > required_class:
             issues.append(f"तुमचा वर्ग ({contractor_class}) आवश्यक वर्गापेक्षा ({minimum_class}) कमी आहे.")
+            issues_en.append(f"Your class ({contractor_class}) is lower than the required class ({minimum_class}).")
 
     if min_turnover:
         if annual_turnover is None:
             unverified.append(f"किमान उलाढाल {format_inr(min_turnover)} आवश्यक आहे; तुमची उलाढाल प्रोफाइलमध्ये नाही.")
+            unverified_en.append(f"Minimum turnover {format_inr(min_turnover)} is required; your turnover is not in your profile.")
         elif annual_turnover < min_turnover:
-            issues.append(
-                f"तुमची उलाढाल {format_inr(annual_turnover)} आहे; आवश्यक किमान {format_inr(min_turnover)}."
-            )
+            issues.append(f"तुमची उलाढाल {format_inr(annual_turnover)} आहे; आवश्यक किमान {format_inr(min_turnover)}.")
+            issues_en.append(f"Your turnover is {format_inr(annual_turnover)}; the minimum required is {format_inr(min_turnover)}.")
 
     if missing or issues:
         eligible: bool | None = False
@@ -115,6 +120,8 @@ def gap_analysis(required_documents: list[str], documents_held: list[str], contr
         "missing_documents": missing,
         "issues": issues,
         "unverified": unverified,
+        "issues_en": issues_en,
+        "unverified_en": unverified_en,
     }
 
 

@@ -36,6 +36,14 @@ def _describe(pct: float) -> str:
     return "SSR/अंदाजित दराइतका"
 
 
+def _describe_en(pct: float) -> str:
+    if pct < 0:
+        return f"{abs(pct):.1f}% below the estimate (SSR)"
+    if pct > 0:
+        return f"{pct:.1f}% above the estimate (SSR)"
+    return "equal to the estimate (SSR)"
+
+
 def _fetch(db: Session, category: str, department: str | None) -> tuple[list[AwardedTender], str]:
     base = select(AwardedTender).where(func.lower(AwardedTender.category).like(f"%{category.lower().strip()}%"))
     min_samples = get_settings().min_history_samples
@@ -98,6 +106,7 @@ def predict_l1(db: Session, category: str, department: str | None, estimated_cos
         },
         "frequent_winners": [{"name": n, "wins": c} for n, c in winners],
         "warnings_mr": [],
+        "warnings_en": [],
     }
 
     if own_cost_estimate:
@@ -108,7 +117,17 @@ def predict_l1(db: Session, category: str, department: str | None, estimated_cos
                 f"सावधान: अंदाजे L1 ({median:+.1f}%) तुमच्या ब्रेक-इव्हन ({breakeven:+.1f}%) पेक्षा कमी आहे — "
                 "या दराने बिड भरल्यास तोटा होईल."
             )
+            result["warnings_en"].append(
+                f"Warning: the predicted L1 ({median:+.1f}%) is below your break-even ({breakeven:+.1f}%) — bidding at this rate would make a loss."
+            )
     result["narrative_mr"] = _narrative(result, estimated_cost, own_cost_estimate)
+    en = (f"Across {len(rows)} past public awards ({', '.join(result['data_basis']['sources'])}), winning bids were about "
+          f"{_describe_en(median)} (predicted L1: {median:+.1f}%). At this rate the bid is ≈ "
+          f"{format_inr(result['scenarios']['recommended']['bid_amount'])}.")
+    margin = result["scenarios"]["recommended"].get("profit_margin_percent")
+    if margin is not None:
+        en += f" Based on your cost estimate, the profit margin is ≈ {margin:.1f}%."
+    result["narrative_en"] = en
     return result
 
 
