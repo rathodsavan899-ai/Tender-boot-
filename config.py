@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     validate_twilio_signature: bool = False
 
     twilio_verify_service_sid: str = ""
+    android_package_name: str = ""
+    android_sha256_fingerprints: str = ""
     require_auth: bool = True
     session_days: int = 30
     otp_sends_per_hour: int = 5

@@ -7,15 +7,21 @@ import zlib
 from functools import lru_cache
 
 from fastapi import APIRouter, HTTPException, Response
+
+from config import get_settings
 from fastapi.responses import HTMLResponse
 
 router = APIRouter()
 
 MANIFEST = {
+    "id": "/app",
     "name": "TenderBot AI — कंत्राटदाराचा डिजिटल मॅनेजर",
     "short_name": "TenderBot",
     "description": "टेंडर शोध, बिड रेट, सबमिशन मंजुरी, कागदपत्र व्हॉल्ट आणि GST सल्ला",
     "lang": "mr",
+    "dir": "ltr",
+    "categories": ["business", "productivity"],
+    "prefer_related_applications": False,
     "start_url": "/app",
     "scope": "/",
     "display": "standalone",
@@ -69,6 +75,19 @@ def _icon(size: int) -> bytes:
 @router.get("/manifest.webmanifest", include_in_schema=False)
 def manifest() -> Response:
     return Response(json.dumps(MANIFEST, ensure_ascii=False), media_type="application/manifest+json")
+
+
+@router.get("/.well-known/assetlinks.json", include_in_schema=False)
+def asset_links() -> Response:
+    """Digital Asset Links so the Android app (Trusted Web Activity) opens full-screen without the browser bar."""
+    s = get_settings()
+    fingerprints = [f.strip() for f in s.android_sha256_fingerprints.split(",") if f.strip()]
+    data: list = []
+    if s.android_package_name and fingerprints:
+        data = [{"relation": ["delegate_permission/common.handle_all_urls"],
+                 "target": {"namespace": "android_app", "package_name": s.android_package_name.strip(),
+                            "sha256_cert_fingerprints": fingerprints}}]
+    return Response(json.dumps(data), media_type="application/json", headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/sw.js", include_in_schema=False)
