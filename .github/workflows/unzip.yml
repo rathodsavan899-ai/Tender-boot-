@@ -1,5 +1,9 @@
 name: Unzip project
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['*.zip']
 permissions:
   contents: write
 jobs:
@@ -8,8 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          ZIP=$(ls *.zip | head -n 1)
-          echo "Using $ZIP"
+          ZIP=$(ls *.zip 2>/dev/null | head -n 1)
+          if [ -z "$ZIP" ]; then echo "no zip"; exit 0; fi
           unzip -o "$ZIP"
           cp -r tenderbot-ai/. .
           rm -rf tenderbot-ai "$ZIP"
