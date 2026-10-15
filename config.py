@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     gst_tds_threshold: float = 250000.0
     enable_scheduler: bool = True
     hunter_interval_hours: int = 6
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    admin_whatsapp: str = ""
     vault_check_interval_hours: int = 24
 
     submission_webhook_url: str = ""

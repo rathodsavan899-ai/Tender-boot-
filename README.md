@@ -37,6 +37,7 @@ Reads public tender listing pages on a schedule and saves new tenders (search sc
 3. `GET /admin/tender-sources` — status per source (ok / down, last error, new tenders found).
 4. `POST /admin/run-hunter` — start a crawl now. A free cron service (e.g. cron-job.org) can call it every 6 hours with the
    `X-Admin-Key` header; that also wakes a sleeping free Render instance, so the crawl keeps running.
+A default CPPP Maharashtra civil source is added automatically on first start. Alerts go to Telegram (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) or WhatsApp (`ADMIN_WHATSAPP`); test with `POST /admin/notify-test`. `GET /admin/telegram-chats` finds your chat id after you message the bot; `GET /admin/health` shows totals; `PATCH /admin/tender-sources/{id}` edits a source (backup_url, keywords…).
 Example CPPP source: `https://eprocure.gov.in/cppp/latestactivetendersnew/mmpdata?page={page}` with `state_filter=Maharashtra`.
 Pages that need a captcha or login cannot be read. Add more hosts with `ALLOWED_SCRAPE_HOSTS`.
 

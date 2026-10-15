@@ -14,7 +14,7 @@ from datetime import date, timedelta
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from agents import LLMUnavailable, format_inr, llm_available
@@ -56,6 +56,7 @@ async def _hunter_loop() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    tender_hunter_agent.seed_default_sources()
     tasks = [asyncio.create_task(_vault_loop()), asyncio.create_task(_hunter_loop())] if settings.enable_scheduler else []
     yield
     for task in tasks:
@@ -887,6 +888,18 @@ class SourceIn(BaseModel):
     enabled: bool = True
 
 
+class SourceUpdate(BaseModel):
+    name: str | None = None
+    url: str | None = None
+    backup_url: str | None = None
+    category: str | None = None
+    district: str | None = None
+    state_filter: str | None = None
+    keywords: str | None = None
+    max_pages: int | None = Field(default=None, ge=1, le=100)
+    enabled: bool | None = None
+
+
 class SourceTest(BaseModel):
     url: str
 
@@ -906,6 +919,39 @@ def admin_list_sources(db: Session = Depends(get_db)) -> dict:
                          "failures_in_a_row": s.consecutive_failures, "last_run_at": s.last_run_at,
                          "last_ok_at": s.last_ok_at, "last_error": s.last_error, "last_found": s.last_found,
                          "last_new": s.last_new, "total_new": s.total_new} for s in rows]}
+
+
+@app.patch("/admin/tender-sources/{source_id}", dependencies=[Depends(require_admin)])
+def admin_update_source(source_id: int, req: SourceUpdate, db: Session = Depends(get_db)) -> dict:
+    source = db.get(TenderSource, source_id)
+    if source is None:
+        raise HTTPException(404, "स्रोत सापडला नाही")
+    changes = req.model_dump(exclude_unset=True)
+    for key, value in changes.items():
+        setattr(source, key, value)
+    if "url" in changes or "backup_url" in changes:
+        source.status, source.consecutive_failures, source.last_error = "new", 0, None
+    db.commit()
+    return {"updated": source_id, "fields": sorted(changes)}
+
+
+@app.get("/admin/health", dependencies=[Depends(require_admin)])
+def admin_health(db: Session = Depends(get_db)) -> dict:
+    total = db.scalar(select(func.count(Tender.id))) or 0
+    open_count = db.scalar(select(func.count(Tender.id)).where(
+        or_(Tender.closing_date.is_(None), Tender.closing_date >= date.today()))) or 0
+    sources = list(db.scalars(select(TenderSource)))
+    return {"tenders_total": total, "tenders_open": open_count,
+            "sources_ok": sum(1 for s in sources if s.status == "ok"),
+            "sources_down": [s.name for s in sources if s.status == "down"],
+            "alerts_configured": {"telegram": bool(settings.telegram_bot_token and settings.telegram_chat_id),
+                                  "whatsapp": bool(settings.admin_whatsapp)}}
+
+
+@app.get("/admin/telegram-chats", dependencies=[Depends(require_admin)])
+def admin_telegram_chats() -> dict:
+    """After you send any message to your Telegram bot, this shows the chat id to put in TELEGRAM_CHAT_ID."""
+    return {"chats": communication_agent.telegram_chat_ids()}
 
 
 @app.delete("/admin/tender-sources/{source_id}", dependencies=[Depends(require_admin)])
@@ -931,6 +977,11 @@ def admin_test_source(req: SourceTest) -> dict:
     sample = [{**r, "closing_date": r["closing_date"].isoformat() if r["closing_date"] else None} for r in rows[:5]]
     return {"ok": bool(rows), "rows_found": len(rows), "sample": sample,
             "note": None if rows else "पेज उघडले पण टेंडरची टेबल ओळखता आली नाही (captcha / वेगळी रचना असू शकते)."}
+
+
+@app.post("/admin/notify-test", dependencies=[Depends(require_admin)])
+def admin_notify_test() -> dict:
+    return communication_agent.notify_admin("✅ TenderBot AI चाचणी संदेश: सूचना बरोबर पोहोचत आहेत.")
 
 
 @app.post("/admin/run-hunter", dependencies=[Depends(require_admin)])

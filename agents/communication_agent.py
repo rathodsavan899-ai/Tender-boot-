@@ -86,6 +86,41 @@ def send_whatsapp(to: str, body: str, content_variables: dict | None = None) -> 
         return {"sent": False, "mode": "error", "to": to_addr, "error": str(exc)}
 
 
+def telegram_chat_ids() -> list[dict]:
+    """Chats that messaged your bot (send it any message first). Used once to find TELEGRAM_CHAT_ID."""
+    s = get_settings()
+    if not s.telegram_bot_token:
+        return []
+    try:
+        data = httpx.get(f"https://api.telegram.org/bot{s.telegram_bot_token}/getUpdates", timeout=15).json()
+    except Exception as exc:  # never include the URL: it contains the bot token
+        logger.error("Telegram getUpdates failed: %s", type(exc).__name__)
+        return []
+    seen: dict[int, dict] = {}
+    for update in data.get("result", []):
+        chat = (update.get("message") or {}).get("chat") or {}
+        if chat.get("id") is not None:
+            seen[chat["id"]] = {"chat_id": chat["id"], "name": chat.get("first_name") or chat.get("title") or ""}
+    return list(seen.values())
+
+
+def notify_admin(text: str) -> dict:
+    """Send an operations alert to the owner: Telegram (free, reliable) first, else WhatsApp (ADMIN_WHATSAPP)."""
+    s = get_settings()
+    if s.telegram_bot_token and s.telegram_chat_id:
+        try:
+            response = httpx.post(f"https://api.telegram.org/bot{s.telegram_bot_token}/sendMessage",
+                                  json={"chat_id": s.telegram_chat_id, "text": text[:3500]}, timeout=15)
+            return {"sent": response.status_code == 200, "channel": "telegram"}
+        except Exception as exc:  # never include the URL: it contains the bot token
+            logger.error("Telegram alert failed: %s", type(exc).__name__)
+            return {"sent": False, "channel": "telegram", "error": type(exc).__name__}
+    if s.admin_whatsapp:
+        return {**send_whatsapp(s.admin_whatsapp, text), "channel": "whatsapp"}
+    logger.info("admin alert (no channel configured): %s", text)
+    return {"sent": False, "channel": "none"}
+
+
 def send_approval_prompt(to: str, tender_title: str, bid_amount: float) -> dict:
     text = (
         f"भाऊ, {format_inr(bid_amount)} चे टेंडर सबमिट करू का?\n"
