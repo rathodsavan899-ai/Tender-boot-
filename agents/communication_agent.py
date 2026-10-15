@@ -9,7 +9,7 @@ from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import Gather, VoiceResponse
 
-from agents import format_inr, logger
+from agents import format_inr, logger, otp_agent
 from config import get_settings
 from database import Submission, normalize_phone
 
@@ -28,6 +28,8 @@ def _client() -> Client:
 def send_otp(phone: str) -> dict:
     """Send an SMS OTP with Twilio Verify. Returns {"sent": bool, "error": str | None}."""
     s = get_settings()
+    if s.fast2sms_api_key:
+        return otp_agent.send_otp(phone)
     if not s.verify_configured:
         return {"sent": False, "error": "not_configured"}
     try:
@@ -41,6 +43,8 @@ def send_otp(phone: str) -> dict:
 
 def check_otp(phone: str, code: str) -> bool:
     s = get_settings()
+    if s.fast2sms_api_key:
+        return otp_agent.check_otp(phone, code)
     if not s.verify_configured:
         return False
     try:

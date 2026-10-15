@@ -26,9 +26,19 @@ Regenerate the whole repo as a zip: `python build_zip.py` → `tenderbot-ai-prod
 Open `{PUBLIC_BASE_URL}/app` in Chrome on your phone → menu ⋮ → **Add to Home screen / Install app**.
 Screens: टेंडर शोध · बिड रेट · सबमिशन मंजुरी · डॉक्युमेंट व्हॉल्ट · GST सल्ला · प्रोफाइल.
 APK: paste the `/app` URL into pwabuilder.com → Package for stores → Android. Then set `ANDROID_PACKAGE_NAME` and `ANDROID_SHA256_FINGERPRINTS` (shown by PWABuilder) so the app opens without the browser bar; `/.well-known/assetlinks.json` is served automatically.
-Login: SMS OTP via Twilio Verify. Uploaded documents are AES-encrypted (Fernet) in the database; Aadhaar numbers are never stored.
+Login: SMS OTP. Set `FAST2SMS_API_KEY` to use our own OTP system (hashed codes, 5-minute expiry, 5 attempts, +91 only) or `TWILIO_VERIFY_SERVICE_SID` for Twilio Verify. Uploaded documents are AES-encrypted (Fernet) in the database; Aadhaar numbers are never stored.
 Required env vars on the host: `TWILIO_VERIFY_SERVICE_SID`, `FILE_ENCRYPTION_SECRET` (never change/lose it), `OPENAI_API_KEY` (AI chat),
 and a persistent PostgreSQL `DATABASE_URL` (SQLite on free hosts is wiped on redeploy, which would delete users, sessions and files).
+
+## Tender Hunter (assistant 1)
+Reads public tender listing pages on a schedule and saves new tenders (search screen shows them).
+1. `POST /admin/test-source {"url": "...{page}..."}` — shows what would be extracted (nothing saved).
+2. `POST /admin/tender-sources` — add the source (optional `backup_url`, `state_filter`, `keywords`, `max_pages`).
+3. `GET /admin/tender-sources` — status per source (ok / down, last error, new tenders found).
+4. `POST /admin/run-hunter` — start a crawl now. A free cron service (e.g. cron-job.org) can call it every 6 hours with the
+   `X-Admin-Key` header; that also wakes a sleeping free Render instance, so the crawl keeps running.
+Example CPPP source: `https://eprocure.gov.in/cppp/latestactivetendersnew/mmpdata?page={page}` with `state_filter=Maharashtra`.
+Pages that need a captcha or login cannot be read. Add more hosts with `ALLOWED_SCRAPE_HOSTS`.
 
 ## Business rules (enforced in `database.check_access`)
 | Status | Access |

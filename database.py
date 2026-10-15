@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from typing import Iterator
 
 from sqlalchemy import (
+    Boolean,
     JSON,
     Date,
     DateTime,
@@ -104,7 +105,33 @@ class Tender(Base):
     estimated_cost: Mapped[float] = mapped_column(Float)
     emd_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    closing_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TenderSource(Base):
+    """A public tender listing page that the Tender Hunter agent reads on a schedule."""
+
+    __tablename__ = "tender_sources"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    url: Mapped[str] = mapped_column(String(500))  # may contain {page}
+    backup_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    category: Mapped[str] = mapped_column(String(100), default="general")
+    district: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    state_filter: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    keywords: Mapped[str | None] = mapped_column(String(500), nullable=True)  # comma separated, any match keeps a row
+    max_pages: Mapped[int] = mapped_column(Integer, default=10)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(10), default="new")  # new | ok | down
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_ok_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    last_found: Mapped[int] = mapped_column(Integer, default=0)
+    last_new: Mapped[int] = mapped_column(Integer, default=0)
+    total_new: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class AwardedTender(Base):
@@ -157,6 +184,20 @@ class VaultDocument(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     contractor: Mapped[Contractor] = relationship(back_populates="documents")
+
+
+class OtpCode(Base):
+    """One-time login code issued by our own OTP system. Only a keyed hash of the code is stored."""
+
+    __tablename__ = "otp_codes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    phone: Mapped[str] = mapped_column(String(20), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class VaultFile(Base):
@@ -249,10 +290,13 @@ def _ensure_columns() -> None:
     from sqlalchemy import inspect, text
 
     existing = {c["name"] for c in inspect(engine).get_columns("contractors")}
+    tender_cols = {c["name"] for c in inspect(engine).get_columns("tenders")}
     with engine.begin() as conn:
         for name, ddl in (("company_name", "VARCHAR(200)"), ("language", "VARCHAR(10)")):
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE contractors ADD COLUMN {name} {ddl}"))
+        if "closing_date" not in tender_cols:
+            conn.execute(text("ALTER TABLE tenders ADD COLUMN closing_date DATE"))
 
 
 def get_db() -> Iterator[Session]:

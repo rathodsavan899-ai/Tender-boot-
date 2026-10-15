@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     require_auth: bool = True
     session_days: int = 30
     otp_sends_per_hour: int = 5
+    fast2sms_api_key: str = ""
+    otp_expiry_minutes: int = 5
     file_encryption_secret: str = ""
     max_upload_mb: int = 5
     chat_messages_per_hour: int = 40
@@ -42,6 +44,7 @@ class Settings(BaseSettings):
     gst_tds_rate_percent: float = 2.0
     gst_tds_threshold: float = 250000.0
     enable_scheduler: bool = True
+    hunter_interval_hours: int = 6
     vault_check_interval_hours: int = 24
 
     submission_webhook_url: str = ""
@@ -49,7 +52,8 @@ class Settings(BaseSettings):
 
     @property
     def verify_configured(self) -> bool:
-        return bool(self.twilio_account_sid and self.twilio_auth_token and self.twilio_verify_service_sid)
+        """True when any OTP provider is set up: our own OTP via Fast2SMS, or Twilio Verify."""
+        return bool(self.fast2sms_api_key or (self.twilio_account_sid and self.twilio_auth_token and self.twilio_verify_service_sid))
 
     @property
     def twilio_configured(self) -> bool:

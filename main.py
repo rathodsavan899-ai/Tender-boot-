@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import logging
 import secrets
 import time
@@ -10,7 +11,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import date, timedelta
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select, text
@@ -18,10 +19,10 @@ from sqlalchemy.orm import Session
 
 from agents import LLMUnavailable, format_inr, llm_available
 from agents import (analyzer_agent, bg_emd_agent, chat_agent, communication_agent, competitor_agent, marketplace_agent,
-                    payment_delay_agent, scraper_agent, tax_agent, vault_agent)
+                    payment_delay_agent, scraper_agent, tax_agent, tender_hunter_agent, vault_agent)
 from config import get_settings
 from pwa import router as pwa_router
-from database import (AuthSession, Contractor, VaultDocument, PaymentBill, SessionLocal, Submission, Tender, check_access, get_db,
+from database import (AuthSession, Contractor, TenderSource, VaultDocument, PaymentBill, SessionLocal, Submission, Tender, check_access, get_db,
                       get_or_create_contractor, init_db, normalize_phone, utcnow)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -42,12 +43,22 @@ async def _vault_loop() -> None:
         await asyncio.sleep(settings.vault_check_interval_hours * 3600)
 
 
+async def _hunter_loop() -> None:
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await asyncio.to_thread(tender_hunter_agent.run_job)
+        except Exception:
+            logger.exception("tender hunter run failed")
+        await asyncio.sleep(max(settings.hunter_interval_hours, 1) * 3600)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
-    task = asyncio.create_task(_vault_loop()) if settings.enable_scheduler else None
+    tasks = [asyncio.create_task(_vault_loop()), asyncio.create_task(_hunter_loop())] if settings.enable_scheduler else []
     yield
-    if task:
+    for task in tasks:
         task.cancel()
 
 
@@ -300,7 +311,7 @@ class DecisionIn(BaseModel):
 def require_admin(x_admin_key: str | None = Header(default=None)) -> None:
     if not settings.admin_api_key:
         raise HTTPException(503, "ADMIN_API_KEY सेट केलेली नाही; admin एंडपॉइंट्स बंद आहेत.")
-    if x_admin_key != settings.admin_api_key:
+    if not hmac.compare_digest((x_admin_key or "").encode("utf-8"), settings.admin_api_key.encode("utf-8")):
         raise HTTPException(401, "अवैध admin key")
 
 
@@ -694,10 +705,15 @@ def auth_send_otp(req: OtpSend) -> dict:
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     if not settings.verify_configured:
-        raise HTTPException(503, "OTP सेवा सेट केलेली नाही (TWILIO_VERIFY_SERVICE_SID).")
+        raise HTTPException(503, "OTP सेवा सेट केलेली नाही (FAST2SMS_API_KEY किंवा TWILIO_VERIFY_SERVICE_SID).")
     if not rate_ok("otp:" + phone, settings.otp_sends_per_hour):
         raise HTTPException(429, "खूप प्रयत्न झाले. थोड्या वेळाने पुन्हा करा.")
-    if not communication_agent.send_otp(phone)["sent"]:
+    result = communication_agent.send_otp(phone)
+    if not result["sent"]:
+        if result.get("error") == "cooldown":
+            raise HTTPException(429, "३० सेकंदांनी पुन्हा OTP मागवा.")
+        if result.get("error") == "only_india":
+            raise HTTPException(422, "सध्या फक्त भारतीय (+91) नंबर चालतात.")
         raise HTTPException(502, "OTP पाठवता आला नाही. नंबर तपासा.")
     return {"sent": True, "phone": phone}
 
@@ -775,14 +791,17 @@ def discover_tenders(req: DiscoverRequest, db: Session = Depends(get_db)) -> dic
 def _tender_view(t: Tender) -> dict:
     return {"tender_id": t.tender_ref, "title": t.title, "department": t.department, "category": t.category,
             "district": t.district, "estimated_cost": t.estimated_cost, "emd_amount": t.emd_amount,
-            "source_url": t.source_url}
+            "source_url": t.source_url, "closing_date": t.closing_date.isoformat() if t.closing_date else None}
 
 
 @app.get("/tenders/search")
 def tenders_search(q: str | None = None, category: str | None = None, district: str | None = None,
                    department: str | None = None, min_cost: float | None = None, max_cost: float | None = None,
-                   limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)) -> dict:
+                   include_closed: bool = False, limit: int = Query(50, ge=1, le=200),
+                   db: Session = Depends(get_db)) -> dict:
     stmt = select(Tender)
+    if not include_closed:
+        stmt = stmt.where(or_(Tender.closing_date.is_(None), Tender.closing_date >= date.today()))
     if q and q.strip():
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(Tender.title.ilike(like), Tender.department.ilike(like), Tender.tender_ref.ilike(like)))
@@ -856,6 +875,71 @@ def submission_decision(submission_id: int, req: DecisionIn, db: Session = Depen
 
 
 # ------------------------------------------------------------------ admin
+class SourceIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    url: str = Field(min_length=10, max_length=500, description="Public listing page; use {page} where the page number goes")
+    backup_url: str | None = None
+    category: str = "general"
+    district: str | None = None
+    state_filter: str | None = Field(default=None, description="Keep only rows whose State column contains this, e.g. Maharashtra")
+    keywords: str | None = Field(default=None, description="Comma separated; keep only titles containing any of these")
+    max_pages: int = Field(default=10, ge=1, le=100)
+    enabled: bool = True
+
+
+class SourceTest(BaseModel):
+    url: str
+
+
+@app.post("/admin/tender-sources", dependencies=[Depends(require_admin)])
+def admin_add_source(req: SourceIn, db: Session = Depends(get_db)) -> dict:
+    source = TenderSource(**req.model_dump())
+    db.add(source)
+    db.commit()
+    return {"id": source.id, "name": source.name}
+
+
+@app.get("/admin/tender-sources", dependencies=[Depends(require_admin)])
+def admin_list_sources(db: Session = Depends(get_db)) -> dict:
+    rows = db.scalars(select(TenderSource).order_by(TenderSource.id))
+    return {"sources": [{"id": s.id, "name": s.name, "url": s.url, "enabled": s.enabled, "status": s.status,
+                         "failures_in_a_row": s.consecutive_failures, "last_run_at": s.last_run_at,
+                         "last_ok_at": s.last_ok_at, "last_error": s.last_error, "last_found": s.last_found,
+                         "last_new": s.last_new, "total_new": s.total_new} for s in rows]}
+
+
+@app.delete("/admin/tender-sources/{source_id}", dependencies=[Depends(require_admin)])
+def admin_delete_source(source_id: int, db: Session = Depends(get_db)) -> dict:
+    source = db.get(TenderSource, source_id)
+    if source is None:
+        raise HTTPException(404, "स्रोत सापडला नाही")
+    db.delete(source)
+    db.commit()
+    return {"deleted": source_id}
+
+
+@app.post("/admin/test-source", dependencies=[Depends(require_admin)])
+def admin_test_source(req: SourceTest) -> dict:
+    """Read one page and show what the Tender Hunter would extract. Nothing is saved."""
+    url = req.url.replace("{page}", "1")
+    try:
+        rows = scraper_agent.parse_tender_listing(scraper_agent.fetch_html(url))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    sample = [{**r, "closing_date": r["closing_date"].isoformat() if r["closing_date"] else None} for r in rows[:5]]
+    return {"ok": bool(rows), "rows_found": len(rows), "sample": sample,
+            "note": None if rows else "पेज उघडले पण टेंडरची टेबल ओळखता आली नाही (captcha / वेगळी रचना असू शकते)."}
+
+
+@app.post("/admin/run-hunter", dependencies=[Depends(require_admin)])
+def admin_run_hunter(background: BackgroundTasks) -> dict:
+    """Start a crawl in the background and return at once (call this from a free cron service to keep it running)."""
+    background.add_task(tender_hunter_agent.run_job)
+    return {"started": True}
+
+
 @app.post("/admin/ingest-awarded-data", dependencies=[Depends(require_admin)])
 def admin_ingest(req: AwardedIngestRequest, db: Session = Depends(get_db)) -> dict:
     if not req.url and not req.records:

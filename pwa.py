@@ -356,7 +356,7 @@ tSearch:'नवीन टेंडर शोधा',tBid:'AI कडून यो
 subSearch:'कीवर्ड आणि फिल्टरने टेंडर शोधा',subBid:'जुन्या अवार्ड डेटावरून अंदाजे L1 रेट',subApprove:'तुमच्या OK शिवाय काहीही सबमिट होत नाही',subVault:'मुदत संपण्याच्या ३० दिवस आधी अलर्ट',subGst:'GST देय, ITC आणि सीए-रेडी तपशील',
 trialDay:'ट्रायल: दिवस {d}/{n}',trialLeft:'मोफत ट्रायल — दिवस {d}/{n}',planVip:'VIP',planBasic:'Basic',trialEnded:'ट्रायल संपली',
 kwPh:'कीवर्ड: रस्ता, पूल, पाणीपुरवठा…',filters:'फिल्टर',category:'श्रेणी',district:'जिल्हा',department:'विभाग',minCost:'किमान किंमत (₹)',maxCost:'कमाल किंमत (₹)',
-found:'{n} टेंडर सापडले',emptyTenders:'या शोधाला कोणतेही टेंडर नाही',emptySub:'खाली "नवीन टेंडर जोडा" किंवा पोर्टल लिंक वापरा.',addTender:'नवीन टेंडर जोडा',tenderNo:'टेंडर क्रमांक',workName:'कामाचे नाव',estCost:'अंदाजित किंमत (₹)',saveTender:'टेंडर सेव्ह करा',tenderSaved:'टेंडर सेव्ह झाले',
+found:'{n} टेंडर सापडले',closes:'शेवटची तारीख: {d}',emptyTenders:'या शोधाला कोणतेही टेंडर नाही',emptySub:'खाली "नवीन टेंडर जोडा" किंवा पोर्टल लिंक वापरा.',addTender:'नवीन टेंडर जोडा',tenderNo:'टेंडर क्रमांक',workName:'कामाचे नाव',estCost:'अंदाजित किंमत (₹)',saveTender:'टेंडर सेव्ह करा',tenderSaved:'टेंडर सेव्ह झाले',
 importT:'पोर्टल लिंकवरून आणा',importNote:'फक्त mahatenders.gov.in / eprocure.gov.in चे सार्वजनिक यादी-पेज चालते.',pageLink:'पेज लिंक',fetchBtn:'आणा',imported:'{c} ओळी सापडल्या, {s} नवीन सेव्ह झाल्या.',
 aBid:'📈 बिड रेट',aElig:'📋 पात्रता',aApprove:'✅ मंजुरी',
 eligTitle:'📋 पात्रता तपासणी',reqDocs:'निविदेत मागितलेली कागदपत्रे (प्रत्येक वेगळ्या ओळीत)',reqDocsPh:'GST Registration\nPAN Card\nEPF Certificate',minClass:'किमान वर्ग',minTurn:'किमान उलाढाल (₹)',heldNote:'व्हॉल्टमधील कागदपत्रे: {n}',check:'तपासा',close:'बंद करा',needDoc:'किमान एक कागदपत्र लिहा.',eligible:'पात्र',notEligible:'अपात्र / त्रुटी',incomplete:'तपासणी अपूर्ण',missing:'❌ कमी कागदपत्रे',have:'✅ उपलब्ध',
@@ -387,7 +387,7 @@ tSearch:'Find new tenders',tBid:'Right rate from AI',tApprove:'Final OK before f
 subSearch:'Search tenders by keyword and filters',subBid:'Predicted L1 rate from past awards',subApprove:'Nothing is submitted without your OK',subVault:'Alerts 30 days before expiry',subGst:'GST payable, ITC and CA-ready details',
 trialDay:'Trial: day {d}/{n}',trialLeft:'Free trial — day {d}/{n}',planVip:'VIP',planBasic:'Basic',trialEnded:'Trial ended',
 kwPh:'Keyword: road, bridge, water supply…',filters:'Filters',category:'Category',district:'District',department:'Department',minCost:'Min cost (₹)',maxCost:'Max cost (₹)',
-found:'{n} tenders found',emptyTenders:'No tenders match this search',emptySub:'Use "Add new tender" or a portal link below.',addTender:'Add new tender',tenderNo:'Tender number',workName:'Name of work',estCost:'Estimated cost (₹)',saveTender:'Save tender',tenderSaved:'Tender saved',
+found:'{n} tenders found',closes:'Closes: {d}',emptyTenders:'No tenders match this search',emptySub:'Use "Add new tender" or a portal link below.',addTender:'Add new tender',tenderNo:'Tender number',workName:'Name of work',estCost:'Estimated cost (₹)',saveTender:'Save tender',tenderSaved:'Tender saved',
 importT:'Import from portal link',importNote:'Only public list pages of mahatenders.gov.in / eprocure.gov.in work.',pageLink:'Page link',fetchBtn:'Import',imported:'{c} rows found, {s} new saved.',
 aBid:'📈 Bid rate',aElig:'📋 Eligibility',aApprove:'✅ Approve',
 eligTitle:'📋 Eligibility check',reqDocs:'Documents required by the tender (one per line)',reqDocsPh:'GST Registration\nPAN Card\nEPF Certificate',minClass:'Minimum class',minTurn:'Minimum turnover (₹)',heldNote:'Documents in your vault: {n}',check:'Check',close:'Close',needDoc:'Enter at least one document.',eligible:'Eligible',notEligible:'Not eligible / gaps',incomplete:'Check incomplete',missing:'❌ Missing documents',have:'✅ Available',
@@ -520,7 +520,8 @@ async function doSearch(silent,btn){
   await busy(btn,async()=>{try{const d=await api('/tenders/search?'+p);lastTenders=d.tenders;
     $('#searchRes').innerHTML=d.tenders.length?`<p class="muted" style="margin:0 4px 8px">${esc(t('found',{n:d.count}))}</p>`+d.tenders.map((x,i)=>`<div class="card"><b>${esc(x.title)}</b>
       <div class="muted">${esc(x.tender_id)} · ${esc(x.department)}</div>
-      <div class="kpi"><div><small>${esc(t('estCost'))}</small><b>${inr(x.estimated_cost)}</b></div><div><small>EMD</small><b>${inr(x.emd_amount)}</b></div></div>
+      ${x.closing_date?`<div class="muted">⏰ ${esc(t('closes',{d:x.closing_date}))}</div>`:''}
+      <div class="kpi"><div><small>${esc(t('estCost'))}</small><b>${x.estimated_cost>0?inr(x.estimated_cost):'—'}</b></div><div><small>EMD</small><b>${inr(x.emd_amount)}</b></div></div>
       <span class="chip">${esc(x.category)}</span>${x.district?`<span class="chip">${esc(x.district)}</span>`:''}
       <div><button class="btn sm sec" onclick="toPredict(${i})">${t('aBid')}</button><button class="btn sm sec" onclick="openAnalyze(${i})">${t('aElig')}</button><button class="btn sm" onclick="toApproval(${i})">${t('aApprove')}</button></div></div>`).join('')
       :`<div class="card empty"><span class="big">🗒️</span><b>${esc(t('emptyTenders'))}</b><div>${esc(t('emptySub'))}</div></div>`}
@@ -531,7 +532,7 @@ async function addTender(btn){if(!needPhone())return;
 async function importTenders(btn){await busy(btn,async()=>{
   try{const d=await api('/discover-tenders','POST',{url:val('im_url'),category:val('im_cat')||null,district:val('im_dist')||null,save:true});
     $('#imRes').innerHTML=`<div class="info">${esc(t('imported',{c:d.count,s:d.saved}))}</div>`;doSearch(true)}catch(e){fail('imRes',e)}})}
-function toPredict(i){const x=lastTenders[i];$('#pr_cat').value=x.category;$('#pr_dept').value=x.department;$('#pr_title').value=x.title;$('#pr_est').value=x.estimated_cost;$('#pr_est').dispatchEvent(new Event('input'));go('predict')}
+function toPredict(i){const x=lastTenders[i];$('#pr_cat').value=x.category;$('#pr_dept').value=x.department;$('#pr_title').value=x.title;$('#pr_est').value=x.estimated_cost||'';$('#pr_est').dispatchEvent(new Event('input'));go('predict')}
 function toApproval(i){const x=lastTenders[i];$('#ap_id').value=x.tender_id;$('#ap_title').value=x.title;$('#ap_amt').value='';go('approval')}
 async function openAnalyze(i){
   if(!needPhone())return;const x=lastTenders[i];await loadVault(true);
@@ -545,7 +546,7 @@ async function openAnalyze(i){
     const docs=val('an_docs').split('\n').map(s=>s.trim()).filter(Boolean);
     if(!docs.length){$('#anRes').innerHTML=`<div class="err">${esc(t('needDoc'))}</div>`;return}
     try{const r=await api('/analyze-tender','POST',{vendor:{phone,name:profile.name||'Contractor',contractor_class:profile.contractor_class||null,categories:profile.categories||[],districts:profile.districts||[],annual_turnover:profile.annual_turnover??null,documents_held:vaultDocs.map(v=>v.doc_type)},
-      tender:{tender_id:x.tender_id,title:x.title,department:x.department,category:x.category,district:x.district,estimated_cost:x.estimated_cost,emd_amount:x.emd_amount,required_documents:docs,minimum_class:val('an_class')||null,min_turnover:num('an_turn')},send_whatsapp:false});
+      tender:{tender_id:x.tender_id,title:x.title,department:x.department,category:x.category,district:x.district,estimated_cost:x.estimated_cost>0?x.estimated_cost:1,emd_amount:x.emd_amount,required_documents:docs,minimum_class:val('an_class')||null,min_turnover:num('an_turn')},send_whatsapp:false});
       const a=r.analysis,v=a.eligible===true?[t('eligible'),'ok']:a.eligible===false?[t('notEligible'),'bad']:[t('incomplete'),'warn'];
       const notes=lang==='mr'?a.issues.concat(a.unverified):a.issues_en.concat(a.unverified_en);
       $('#anRes').innerHTML=`<div class="card" style="margin-top:12px"><span class="chip ${v[1]}">${v[0]}</span>

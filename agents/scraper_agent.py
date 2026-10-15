@@ -25,12 +25,15 @@ HEADER_KEYS: list[tuple[str, tuple[str, ...]]] = [
     ("awarded_amount", ("awarded value", "award value", "contract value", "awarded amount", "accepted", "l1 value", "contract amount")),
     ("winner_name", ("awarded to", "winner", "successful", "contractor name", "bidder name", "vendor")),
     ("award_date", ("award date", "date of award", "aoc date", "awarded on", "aoc")),
+    ("closing_date", ("closing date", "last date", "submission end", "due date")),
+    ("state", ("state name", "state")),
     ("tender_ref", ("tender id", "tender ref", "reference", "tender no", "nit no", "e-tender")),
     ("department", ("department", "organisation", "organization", "office")),
     ("title", ("title", "name of work", "work", "description")),
 ]
 
-DATE_FORMATS = ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%b-%Y", "%d %b %Y", "%d-%B-%Y")
+DATE_FORMATS = ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%b-%Y", "%d %b %Y", "%d-%B-%Y",
+                "%d-%b-%Y %I:%M %p", "%d-%m-%Y %I:%M %p", "%d-%b-%Y %H:%M", "%d-%m-%Y %H:%M", "%d/%m/%Y %H:%M")
 
 
 def parse_amount(text: str | float | int | None) -> float | None:
@@ -57,8 +60,8 @@ def parse_date(text: str | date | None) -> date | None:
     return None
 
 
-def parse_tables(html: str, required: tuple[str, ...]) -> list[dict]:
-    """Extract rows from HTML tables whose header row maps to every key in `required`."""
+def parse_tables(html: str, required: tuple[str, ...], any_of: tuple[str, ...] = ()) -> list[dict]:
+    """Extract rows from HTML tables whose header row maps to every key in `required` (and any one of `any_of`)."""
     soup = BeautifulSoup(html, "html.parser")
     out: list[dict] = []
     for table in soup.find_all("table"):
@@ -75,6 +78,8 @@ def parse_tables(html: str, required: tuple[str, ...]) -> list[dict]:
                     mapping[idx] = key
                     break
         if not all(key in mapping.values() for key in required):
+            continue
+        if any_of and not any(key in mapping.values() for key in any_of):
             continue
         for row in rows[1:]:
             cells = [c.get_text(" ", strip=True) for c in row.find_all(["td", "th"])]
@@ -165,6 +170,36 @@ def ingest_awarded_json(db: Session, items: list[dict], source: str, default_cat
     result = ingest_records(db, records)
     result.update({"received": len(items), "usable_records": len(records)})
     return result
+
+
+TENDER_ID_RE = re.compile(r"\b(20\d{2}_[A-Za-z0-9]+_\d+_\d+)\b")
+BRACKET_RE = re.compile(r"\s*\[[^\[\]]*\]")
+
+
+def parse_tender_listing(html: str) -> list[dict]:
+    """Rows of a public 'latest tenders' listing: tender_ref, title, department, state, closing_date, estimated_cost."""
+    out: list[dict] = []
+    for row in parse_tables(html, required=(), any_of=("tender_ref", "title")):
+        a, b = (row.get("title") or "").strip(), (row.get("tender_ref") or "").strip()
+        text = a if len(a) >= len(b) else b          # the longer cell is the combined "Title/Ref.No./Tender Id" text
+        ids = TENDER_ID_RE.findall(text)
+        ref = ids[-1] if ids else ""
+        if not ref:
+            brackets = re.findall(r"\[([^\[\]]{6,})\]", text)
+            ref = brackets[-1].strip() if brackets else (b if b and b != text and len(b) <= 80 else "")
+        title = BRACKET_RE.sub("", text.replace(ref, "") if ref and ref in text else text).strip(" /-,")
+        if len(title) < 8:
+            continue
+        if not ref:
+            ref = "WEB-" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:12]
+        state = (row.get("state") or "").strip()
+        out.append({
+            "tender_ref": ref[:120], "title": title, "state": state,
+            "department": (row.get("department") or state or "—").strip()[:300],
+            "closing_date": parse_date(row.get("closing_date")),
+            "estimated_cost": parse_amount(row.get("estimated_cost")) or 0.0,
+        })
+    return out
 
 
 def discover_active_tenders(url: str) -> list[dict]:
