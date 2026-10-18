@@ -111,7 +111,13 @@ def notify_admin(text: str) -> dict:
         try:
             response = httpx.post(f"https://api.telegram.org/bot{s.telegram_bot_token}/sendMessage",
                                   json={"chat_id": s.telegram_chat_id, "text": text[:3500]}, timeout=15)
-            return {"sent": response.status_code == 200, "channel": "telegram"}
+            if response.status_code == 200:
+                return {"sent": True, "channel": "telegram"}
+            try:
+                reason = str(response.json().get("description", ""))[:120]  # Telegram's own explanation; contains no secrets
+            except Exception:
+                reason = ""
+            return {"sent": False, "channel": "telegram", "http_status": response.status_code, "reason": reason}
         except Exception as exc:  # never include the URL: it contains the bot token
             logger.error("Telegram alert failed: %s", type(exc).__name__)
             return {"sent": False, "channel": "telegram", "error": type(exc).__name__}
