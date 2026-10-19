@@ -46,6 +46,7 @@ Every day after `CONTENT_HOUR_IST` (08:00 IST) it makes a Marathi poster (1080x1
 sends them to your Telegram. Topics are limited to features that really exist; "tender of the day" uses only tenders found in
 the last 24 hours. If `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_TOKEN` and `INSTAGRAM_BUSINESS_ID` are set, it also posts to the Page and
 Instagram (one post a day). `POST /admin/content/run?force=true` makes one now, `GET /admin/content/latest` shows the last 7.
+Posters use a sunset construction-site look; with `CONTENT_AI_BACKGROUND=true` an AI picture (no text in it) is used as background. After setting the bot token run `POST /admin/telegram-webhook` once: then typing `/poster` or `/status` to your bot works.
 YouTube is not automated: API uploads stay private until Google audits the project.
 
 ## Business rules (enforced in `database.check_access`)

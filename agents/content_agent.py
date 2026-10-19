@@ -18,9 +18,9 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from agents import communication_agent, logger
+from agents import communication_agent, logger, poster_pro
 from config import get_settings
-from database import AwardedTender, ContentPost, SessionLocal, Tender, utcnow
+from database import AwardedTender, ContentPost, PosterBackground, SessionLocal, Tender, utcnow
 
 FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -177,11 +177,14 @@ def _tender_topic(db: Session) -> dict | None:
         .order_by(Tender.created_at.desc())))
     if not rows:
         return None
-    points = []
+    points, shown = [], []
     for t in rows[:3]:
         title = t.title if len(t.title) <= 64 else t.title[:61] + "…"
-        points.append((f"{t.closing_date.strftime('%d/%m')} पर्यंत — " if t.closing_date else "") + title)
-    return {"key": "tender_of_day", "kind": "tender", "screen": "टेंडर शोध", "points": points,
+        date_text = t.closing_date.strftime("%d/%m") if t.closing_date else None
+        points.append((f"{date_text} पर्यंत — " if date_text else "") + title)
+        shown.append({"title": title, "date": date_text})
+    return {"key": "tender_of_day", "kind": "tender", "screen": "टेंडर शोध", "points": points, "rows": shown,
+            "card_points": ["सार्वजनिक पोर्टलवरून गोळा केलेले", "शेवटची तारीख एका नजरेत", "ॲपमध्ये पात्रता तपासा"],
             "headline": f"आज {len(rows)} नवे टेंडर सापडले", "note": "स्रोत: CPPP सार्वजनिक यादी. अधिकृत माहिती पोर्टलवर तपासा."}
 
 
@@ -192,6 +195,29 @@ def pick_topic(db: Session, today: date) -> dict:
             return tender_topic
     allowed = [t for t in TOPICS if _topic_allowed(db, t)]
     return {**allowed[(today.toordinal() // 2) % len(allowed)], "kind": "feature", "note": None}
+
+
+def _ai_background(db: Session) -> bytes | None:
+    """Rotate through stored AI pictures; make at most one new picture per day (up to 6) when enabled."""
+    s = get_settings()
+    stored = list(db.scalars(select(PosterBackground).order_by(PosterBackground.id)))
+    if s.content_ai_background and s.openai_api_key and len(stored) < 6 and not any(
+            b.created_at.date() == utcnow().date() for b in stored):
+        try:
+            r = httpx.post("https://api.openai.com/v1/images/generations", timeout=180,
+                           headers={"Authorization": f"Bearer {s.openai_api_key}"},
+                           json={"model": s.openai_image_model, "prompt": poster_pro.BACKGROUND_PROMPT,
+                                 "size": "1024x1536", "quality": "medium", "n": 1})
+            item = r.json()["data"][0]
+            import base64
+            png = base64.b64decode(item["b64_json"]) if item.get("b64_json") else httpx.get(item["url"], timeout=60).content
+            row = PosterBackground(png=png)
+            db.add(row)
+            db.commit()
+            stored.append(row)
+        except Exception as exc:                      # never leak the key: only the exception type is logged
+            logger.warning("AI background not created: %s", type(exc).__name__)
+    return stored[ist_today().toordinal() % len(stored)].png if stored else None
 
 
 def build_caption(topic: dict, link: str) -> str:
@@ -289,10 +315,18 @@ def generate_today(db: Session, force: bool = False) -> ContentPost:
     link = s.public_base_url.rstrip("/") + "/app"
     topic = pick_topic(db, today)
     poster, poster_error = None, None
+    short_link = link.replace("https://", "").replace("http://", "")
     try:
-        poster = render_poster(topic["headline"], topic["points"], topic.get("note"),
-                               link.replace("https://", "").replace("http://", ""), compact=topic["kind"] == "tender")
-    except PosterUnavailable as exc:
+        try:
+            poster = poster_pro.render_poster_pro(topic["headline"], topic.get("card_points") or topic["points"],
+                                                  topic.get("note"), short_link, topic.get("rows"), _ai_background(db))
+        except poster_pro.PosterUnavailable:
+            raise
+        except Exception as exc:                      # pro layout failed: fall back to the simple poster
+            logger.warning("pro poster failed (%s); using the simple layout", type(exc).__name__)
+            poster = render_poster(topic["headline"], topic["points"], topic.get("note"), short_link,
+                                   compact=topic["kind"] == "tender")
+    except (PosterUnavailable, poster_pro.PosterUnavailable) as exc:
         poster_error = str(exc)
         logger.warning("poster not generated: %s", poster_error)
     post = ContentPost(post_date=today, kind=topic["kind"], topic_key=topic["key"], headline=topic["headline"],

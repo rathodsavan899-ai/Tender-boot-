@@ -1,6 +1,8 @@
 """Central configuration loaded from environment variables / .env."""
+import re
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +13,13 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
     database_url: str = "sqlite:///./tenderbot.db"
     public_base_url: str = "http://localhost:8000"
+
+    @field_validator("public_base_url", mode="before")
+    @classmethod
+    def _clean_base_url(cls, value):
+        """Accept a URL pasted as a markdown link ('[https://x](https://x)') or with spaces/quotes and keep a plain URL."""
+        match = re.search(r"https?://[^\s\]\)\"'<>]+", str(value or ""))
+        return match.group(0).rstrip("/") if match else value
     admin_api_key: str = ""
 
     openai_api_key: str = ""
@@ -46,6 +55,8 @@ class Settings(BaseSettings):
     enable_scheduler: bool = True
     hunter_interval_hours: int = 6
     content_hour_ist: int = 8
+    content_ai_background: bool = False
+    openai_image_model: str = "gpt-image-1"
     facebook_page_id: str = ""
     facebook_page_token: str = ""
     instagram_business_id: str = ""

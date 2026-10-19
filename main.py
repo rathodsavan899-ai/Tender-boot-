@@ -995,6 +995,45 @@ def admin_notify_test() -> dict:
     return communication_agent.notify_admin("✅ TenderBot AI चाचणी संदेश: सूचना बरोबर पोहोचत आहेत.")
 
 
+def _tg_secret() -> str:
+    return hashlib.sha256(("tg:" + settings.telegram_bot_token).encode("utf-8")).hexdigest()[:32]
+
+
+def _status_text() -> str:
+    with SessionLocal() as db:
+        total = db.scalar(select(func.count(Tender.id))) or 0
+        today_new = db.scalar(select(func.count(Tender.id)).where(Tender.created_at >= utcnow() - timedelta(hours=24))) or 0
+        down = [s.name for s in db.scalars(select(TenderSource)) if s.status == "down"]
+    return (f"📊 स्थिती\nएकूण टेंडर: {total}\nगेल्या २४ तासांत नवे: {today_new}\n"
+            + ("⚠️ बंद स्रोत: " + ", ".join(down) if down else "✅ सर्व स्रोत चालू"))
+
+
+@app.post("/telegram-webhook/{secret}", include_in_schema=False)
+async def telegram_webhook(secret: str, request: Request, background: BackgroundTasks) -> dict:
+    """Commands typed to the owner's Telegram bot. Only the configured owner chat is obeyed."""
+    if not settings.telegram_bot_token or not hmac.compare_digest(secret, _tg_secret()):
+        raise HTTPException(404)
+    message = (await request.json()).get("message") or {}
+    if str((message.get("chat") or {}).get("id", "")) != str(settings.telegram_chat_id):
+        return {"ok": True}
+    text = (message.get("text") or "").strip().lower()
+    if text.startswith("/poster") or "पोस्टर" in text or "poster" in text:
+        background.add_task(content_agent.run_daily_job, True)
+        reply = "⏳ पोस्टर बनवत आहे, १-२ मिनिटांत येईल."
+    elif text.startswith("/status") or "स्थिती" in text or "status" in text:
+        reply = await asyncio.to_thread(_status_text)
+    else:
+        reply = "मी हे करू शकतो:\n/poster — आजचे पोस्टर बनवा\n/status — टेंडर आणि स्रोतांची स्थिती"
+    background.add_task(communication_agent.notify_admin, reply)
+    return {"ok": True}
+
+
+@app.post("/admin/telegram-webhook", dependencies=[Depends(require_admin)])
+def admin_set_telegram_webhook() -> dict:
+    """Run once after TELEGRAM_BOT_TOKEN is set: connects the bot so /poster and /status work."""
+    return communication_agent.telegram_set_webhook(f"{settings.public_base_url.rstrip('/')}/telegram-webhook/{_tg_secret()}")
+
+
 @app.post("/admin/content/run", dependencies=[Depends(require_admin)])
 def admin_content_run(background: BackgroundTasks, force: bool = False) -> dict:
     """Make today's poster + caption now (force=true makes a new one even if today's exists) and send it to the owner."""

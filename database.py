@@ -200,6 +200,16 @@ class OtpCode(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class PosterBackground(Base):
+    """AI-made background pictures (no text in them); reused so image generation costs stay small."""
+
+    __tablename__ = "poster_backgrounds"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    png: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ContentPost(Base):
     """A daily marketing post made by the content assistant (poster image kept so Instagram can fetch it)."""
 

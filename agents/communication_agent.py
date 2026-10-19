@@ -127,6 +127,20 @@ def notify_admin(text: str) -> dict:
     return {"sent": False, "channel": "none"}
 
 
+def telegram_set_webhook(url: str) -> dict:
+    """Register the webhook so messages typed to the bot reach /telegram-webhook/..."""
+    s = get_settings()
+    if not s.telegram_bot_token:
+        return {"ok": False, "error": "TELEGRAM_BOT_TOKEN missing"}
+    try:
+        data = httpx.post(f"https://api.telegram.org/bot{s.telegram_bot_token}/setWebhook", timeout=20,
+                          json={"url": url, "allowed_updates": ["message"]}).json()
+        return {"ok": bool(data.get("ok")), "description": str(data.get("description", ""))[:150]}
+    except Exception as exc:
+        logger.error("Telegram setWebhook failed: %s", type(exc).__name__)
+        return {"ok": False, "error": type(exc).__name__}
+
+
 def notify_admin_photo(png: bytes, caption: str) -> dict:
     """Send an image to the owner on Telegram (WhatsApp image delivery is not supported here)."""
     s = get_settings()
