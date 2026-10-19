@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     gst_tds_threshold: float = 250000.0
     enable_scheduler: bool = True
     hunter_interval_hours: int = 6
+    content_hour_ist: int = 8
+    facebook_page_id: str = ""
+    facebook_page_token: str = ""
+    instagram_business_id: str = ""
+    meta_graph_version: str = "v23.0"
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     admin_whatsapp: str = ""

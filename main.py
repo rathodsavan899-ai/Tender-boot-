@@ -19,10 +19,10 @@ from sqlalchemy.orm import Session
 
 from agents import LLMUnavailable, format_inr, llm_available
 from agents import (analyzer_agent, bg_emd_agent, chat_agent, communication_agent, competitor_agent, marketplace_agent,
-                    payment_delay_agent, scraper_agent, tax_agent, tender_hunter_agent, vault_agent)
+                    payment_delay_agent, scraper_agent, tax_agent, tender_hunter_agent, vault_agent, content_agent)
 from config import get_settings
 from pwa import router as pwa_router
-from database import (AuthSession, Contractor, TenderSource, VaultDocument, PaymentBill, SessionLocal, Submission, Tender, check_access, get_db,
+from database import (AuthSession, Contractor, ContentPost, TenderSource, VaultDocument, PaymentBill, SessionLocal, Submission, Tender, check_access, get_db,
                       get_or_create_contractor, init_db, normalize_phone, utcnow)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -53,11 +53,22 @@ async def _hunter_loop() -> None:
         await asyncio.sleep(max(settings.hunter_interval_hours, 1) * 3600)
 
 
+async def _content_loop() -> None:
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await asyncio.to_thread(content_agent.run_daily_job)
+        except Exception:
+            logger.exception("daily content run failed")
+        await asyncio.sleep(1800)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
     tender_hunter_agent.seed_default_sources()
-    tasks = [asyncio.create_task(_vault_loop()), asyncio.create_task(_hunter_loop())] if settings.enable_scheduler else []
+    tasks = [asyncio.create_task(_vault_loop()), asyncio.create_task(_hunter_loop()),
+                                  asyncio.create_task(_content_loop())] if settings.enable_scheduler else []
     yield
     for task in tasks:
         task.cancel()
@@ -982,6 +993,29 @@ def admin_test_source(req: SourceTest) -> dict:
 @app.post("/admin/notify-test", dependencies=[Depends(require_admin)])
 def admin_notify_test() -> dict:
     return communication_agent.notify_admin("✅ TenderBot AI चाचणी संदेश: सूचना बरोबर पोहोचत आहेत.")
+
+
+@app.post("/admin/content/run", dependencies=[Depends(require_admin)])
+def admin_content_run(background: BackgroundTasks, force: bool = False) -> dict:
+    """Make today's poster + caption now (force=true makes a new one even if today's exists) and send it to the owner."""
+    background.add_task(content_agent.run_daily_job, True if force else False)
+    return {"started": True, "force": force}
+
+
+@app.get("/admin/content/latest", dependencies=[Depends(require_admin)])
+def admin_content_latest(db: Session = Depends(get_db)) -> dict:
+    rows = db.scalars(select(ContentPost).order_by(ContentPost.id.desc()).limit(7))
+    return {"posts": [{"id": p.id, "date": p.post_date, "kind": p.kind, "topic": p.topic_key, "status": p.status,
+                       "has_poster": bool(p.poster_png), "delivery": p.delivery, "headline": p.headline} for p in rows]}
+
+
+@app.get("/content/poster/{token}.png", include_in_schema=False)
+def content_poster(token: str, db: Session = Depends(get_db)) -> Response:
+    """Public by design (Instagram fetches the image from here); the token is unguessable."""
+    post = db.scalar(select(ContentPost).where(ContentPost.public_token == token))
+    if post is None or not post.poster_png:
+        raise HTTPException(404)
+    return Response(post.poster_png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
 
 @app.post("/admin/run-hunter", dependencies=[Depends(require_admin)])

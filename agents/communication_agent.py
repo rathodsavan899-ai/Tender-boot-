@@ -127,6 +127,21 @@ def notify_admin(text: str) -> dict:
     return {"sent": False, "channel": "none"}
 
 
+def notify_admin_photo(png: bytes, caption: str) -> dict:
+    """Send an image to the owner on Telegram (WhatsApp image delivery is not supported here)."""
+    s = get_settings()
+    if not (s.telegram_bot_token and s.telegram_chat_id):
+        return {"sent": False, "channel": "none"}
+    try:
+        response = httpx.post(f"https://api.telegram.org/bot{s.telegram_bot_token}/sendPhoto", timeout=30,
+                              data={"chat_id": s.telegram_chat_id, "caption": caption[:1000]},
+                              files={"photo": ("poster.png", png, "image/png")})
+        return {"sent": response.status_code == 200, "channel": "telegram", "http_status": response.status_code}
+    except Exception as exc:  # never include the URL: it contains the bot token
+        logger.error("Telegram photo failed: %s", type(exc).__name__)
+        return {"sent": False, "channel": "telegram", "error": type(exc).__name__}
+
+
 def send_approval_prompt(to: str, tender_title: str, bid_amount: float) -> dict:
     text = (
         f"भाऊ, {format_inr(bid_amount)} चे टेंडर सबमिट करू का?\n"

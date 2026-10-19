@@ -41,6 +41,13 @@ A default CPPP Maharashtra civil source is added automatically on first start. A
 Example CPPP source: `https://eprocure.gov.in/cppp/latestactivetendersnew/mmpdata?page={page}` with `state_filter=Maharashtra`.
 Pages that need a captcha or login cannot be read. Add more hosts with `ALLOWED_SCRAPE_HOSTS`.
 
+## Content assistant (daily posters)
+Every day after `CONTENT_HOUR_IST` (08:00 IST) it makes a Marathi poster (1080x1350), a caption and a 30-second video script and
+sends them to your Telegram. Topics are limited to features that really exist; "tender of the day" uses only tenders found in
+the last 24 hours. If `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_TOKEN` and `INSTAGRAM_BUSINESS_ID` are set, it also posts to the Page and
+Instagram (one post a day). `POST /admin/content/run?force=true` makes one now, `GET /admin/content/latest` shows the last 7.
+YouTube is not automated: API uploads stay private until Google audits the project.
+
 ## Business rules (enforced in `database.check_access`)
 | Status | Access |
 |---|---|

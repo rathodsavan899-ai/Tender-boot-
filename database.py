@@ -200,6 +200,25 @@ class OtpCode(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ContentPost(Base):
+    """A daily marketing post made by the content assistant (poster image kept so Instagram can fetch it)."""
+
+    __tablename__ = "content_posts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_date: Mapped[date] = mapped_column(Date, index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # feature | tender
+    topic_key: Mapped[str] = mapped_column(String(40))
+    headline: Mapped[str] = mapped_column(Text)
+    caption: Mapped[str] = mapped_column(Text)
+    script: Mapped[str] = mapped_column(Text)
+    poster_png: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    public_token: Mapped[str] = mapped_column(String(40), index=True)
+    status: Mapped[str] = mapped_column(String(10), default="draft")  # draft | sent | posted
+    delivery: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class VaultFile(Base):
     """Encrypted uploaded file for a vault document (Fernet; key derived from FILE_ENCRYPTION_SECRET)."""
 
