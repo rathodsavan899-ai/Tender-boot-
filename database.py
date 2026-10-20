@@ -210,6 +210,18 @@ class PosterBackground(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ContentVideo(Base):
+    """The daily vertical video (kept in the database so Instagram/Facebook can fetch it from a public link)."""
+
+    __tablename__ = "content_videos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int] = mapped_column(Integer, index=True)
+    mp4: Mapped[bytes] = mapped_column(LargeBinary)
+    seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ContentPost(Base):
     """A daily marketing post made by the content assistant (poster image kept so Instagram can fetch it)."""
 

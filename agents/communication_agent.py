@@ -141,6 +141,22 @@ def telegram_set_webhook(url: str) -> dict:
         return {"ok": False, "error": type(exc).__name__}
 
 
+def notify_admin_video(mp4: bytes, caption: str) -> dict:
+    """Send the daily video to the owner on Telegram (limit 50 MB; ours is a few MB)."""
+    s = get_settings()
+    if not (s.telegram_bot_token and s.telegram_chat_id):
+        return {"sent": False, "channel": "none"}
+    try:
+        response = httpx.post(f"https://api.telegram.org/bot{s.telegram_bot_token}/sendVideo", timeout=120,
+                              data={"chat_id": s.telegram_chat_id, "caption": caption[:1000], "supports_streaming": "true",
+                                    "width": "720", "height": "1280"},
+                              files={"video": ("video.mp4", mp4, "video/mp4")})
+        return {"sent": response.status_code == 200, "channel": "telegram", "http_status": response.status_code}
+    except Exception as exc:
+        logger.error("Telegram video failed: %s", type(exc).__name__)
+        return {"sent": False, "channel": "telegram", "error": type(exc).__name__}
+
+
 def notify_admin_photo(png: bytes, caption: str) -> dict:
     """Send an image to the owner on Telegram (WhatsApp image delivery is not supported here)."""
     s = get_settings()

@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     hunter_interval_hours: int = 6
     content_hour_ist: int = 8
     content_ai_background: bool = False
+    content_video: bool = True
+    google_tts_api_key: str = ""
+    google_tts_voice: str = "mr-IN-Wavenet-A"
     openai_image_model: str = "gpt-image-1"
     facebook_page_id: str = ""
     facebook_page_token: str = ""

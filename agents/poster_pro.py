@@ -236,3 +236,103 @@ def render_poster_pro(headline: str, card_points: list[str], note: str | None, l
     out = io.BytesIO()
     canvas.convert("RGB").save(out, format="PNG", optimize=True)
     return out.getvalue()
+
+
+# ====================================================================== video scenes (9:16)
+VW, VH = 1080, 1920
+
+
+_BASE_CACHE: dict = {}
+
+
+def _scene_base(background: bytes | None):
+    """The 1080x1920 background is built once per video and reused by every scene (saves a lot of CPU)."""
+    from PIL import Image
+    key = hash(background) if background else None
+    if key not in _BASE_CACHE:
+        _BASE_CACHE.clear()
+        try:
+            base = _cover(Image.open(io.BytesIO(background)).convert("RGB"), VW, VH) if background else _cover(fallback_background(), VW, VH)
+        except Exception:
+            base = _cover(fallback_background(), VW, VH)
+        _BASE_CACHE[key] = base
+    return _BASE_CACHE[key].copy()
+
+
+def _scene_canvas(background: bytes | None, darkness: float):
+    from PIL import Image
+    canvas = _scene_base(background).convert("RGBA")
+    canvas.alpha_composite(Image.new("RGBA", (VW, VH), (6, 14, 30, int(255 * darkness))))
+    return canvas
+
+
+def _scene_logo(canvas, bold, regular):
+    from PIL import ImageDraw
+    d = ImageDraw.Draw(canvas)
+    d.rounded_rectangle((60, 70, 156, 166), radius=24, fill=BLUE + (255,), outline=WHITE + (255,), width=3)
+    d.rectangle((84, 94, 132, 108), fill=WHITE)
+    d.rectangle((102, 108, 114, 146), fill=WHITE)
+    d.rectangle((84, 152, 132, 158), fill=GOLD)
+    d.text((176, 70), "TenderBot AI", font=bold(60), fill=WHITE)
+    d.text((178, 140), "कंत्राटदारांसाठी AI सहाय्यक", font=regular(30), fill=(255, 205, 120))
+
+
+def render_scene(kind: str, text: str, index: int, total: int, link: str = "", date: str | None = None,
+                 background: bytes | None = None) -> bytes:
+    """One 1080x1920 frame. kind: hook | point | cta."""
+    from PIL import ImageDraw
+    bold, regular = _fonts()
+    canvas = _scene_canvas(background, {"hook": 0.48, "point": 0.60, "cta": 0.72}[kind])
+    _scene_logo(canvas, bold, regular)
+    d = ImageDraw.Draw(canvas)
+
+    if kind == "hook":
+        size = 112
+        while True:
+            hf = bold(size)
+            lines = _wrap(d, text, hf, 940)
+            if len(lines) <= 4 or size <= 64:
+                break
+            size -= 6
+        step = int(size * 1.4)
+        y = (VH - len(lines[:4]) * step) // 2 - 40
+        for i, line in enumerate(lines[:4]):
+            d.text((70, y), line, font=hf, fill=WHITE if i == 0 else GOLD)
+            y += step
+        d.rounded_rectangle((70, y + 30, 330, y + 40), radius=5, fill=GOLD)
+
+    elif kind == "point":
+        pill = f"{index} / {total}"
+        pf = bold(46)
+        d.rounded_rectangle((60, 330, 60 + int(d.textlength(pill, font=pf)) + 70, 424), radius=47, fill=GOLD + (255,))
+        d.text((95, 342), pill, font=pf, fill=NAVY)
+        _glass(canvas, (60, 500, 1020, 1300), 44, (255, 255, 255, 42), (255, 255, 255, 120), 3)
+        d = ImageDraw.Draw(canvas)
+        d.ellipse((110, 560, 190, 640), fill=GOLD + (255,))
+        d.line([(127, 600), (142, 618), (172, 582)], fill=NAVY + (255,), width=9)
+        tf = bold(62) if len(text) < 60 else regular(54)
+        y = 690
+        for line in _clip(d, text, tf, 830, 7):
+            d.text((110, y), line, font=tf, fill=WHITE)
+            y += int(tf.size * 1.42)
+        if date:
+            d.text((110, 1190), f"शेवटची तारीख: {date}", font=bold(50), fill=GOLD)
+        for i in range(total):
+            cx = VW // 2 - (total - 1) * 36 + i * 72
+            d.ellipse((cx - 14, VH - 300, cx + 14, VH - 272), fill=(GOLD if i + 1 == index else (255, 255, 255, 110)))
+
+    else:  # cta
+        lf = regular(44)
+        d.text(((VW - d.textlength("आजच सुरू करा", font=lf)) / 2, 620), "आजच सुरू करा", font=lf, fill=(255, 205, 120))
+        d.rounded_rectangle((60, 720, VW - 60, 960), radius=60, fill=GOLD + (255,))
+        cta, cf = "१५ दिवस\nमोफत ट्रायल", bold(80)
+        for i, line in enumerate(cta.split("\n")):
+            d.text(((VW - d.textlength(line, font=cf)) / 2, 745 + i * 100), line, font=cf, fill=NAVY)
+        if link:
+            kf = bold(48)
+            d.text(((VW - d.textlength(link, font=kf)) / 2, 1060), link, font=kf, fill=WHITE)
+        d.text(((VW - d.textlength("TenderBot AI", font=bold(60))) / 2, 1240), "TenderBot AI", font=bold(60), fill=WHITE)
+
+    out = io.BytesIO()
+    canvas.convert("RGB").save(out, format="PNG")
+    return out.getvalue()

@@ -18,9 +18,9 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from agents import communication_agent, logger, poster_pro
+from agents import communication_agent, logger, poster_pro, video_agent
 from config import get_settings
-from database import AwardedTender, ContentPost, PosterBackground, SessionLocal, Tender, utcnow
+from database import AwardedTender, ContentPost, ContentVideo, PosterBackground, SessionLocal, Tender, utcnow
 
 FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -247,11 +247,23 @@ def _meta_error(response: httpx.Response) -> str:
         return f"http {response.status_code}"
 
 
-def post_facebook(post: ContentPost) -> dict | None:
+def _public(post: ContentPost, kind: str, ext: str) -> str:
+    return f"{get_settings().public_base_url.rstrip('/')}/content/{kind}/{post.public_token}.{ext}"
+
+
+def post_facebook(post: ContentPost, has_video: bool = False) -> dict | None:
     s = get_settings()
     if not (s.facebook_page_id and s.facebook_page_token):
         return None
+    video_error = None
     try:
+        if has_video:
+            r = httpx.post(_meta(f"{s.facebook_page_id}/videos"), timeout=120,
+                           data={"file_url": _public(post, "video", "mp4"), "description": post.caption,
+                                 "access_token": s.facebook_page_token})
+            if r.status_code == 200 and "id" in r.json():
+                return {"ok": True, "type": "video"}
+            video_error = _meta_error(r)
         if post.poster_png:
             r = httpx.post(_meta(f"{s.facebook_page_id}/photos"), timeout=60,
                            data={"caption": post.caption, "access_token": s.facebook_page_token},
@@ -260,29 +272,63 @@ def post_facebook(post: ContentPost) -> dict | None:
             r = httpx.post(_meta(f"{s.facebook_page_id}/feed"), timeout=60,
                            data={"message": post.caption, "access_token": s.facebook_page_token})
         ok = r.status_code == 200 and "id" in r.json()
-        return {"ok": ok, **({} if ok else {"error": _meta_error(r)})}
+        out = {"ok": ok, "type": "photo"}
+        if not ok:
+            out["error"] = _meta_error(r)
+        if video_error:
+            out["video_error"] = video_error
+        return out
     except Exception as exc:
         logger.error("facebook post failed: %s", type(exc).__name__)
         return {"ok": False, "error": type(exc).__name__}
 
 
-def post_instagram(post: ContentPost) -> dict | None:
+def _ig_publish(container: str) -> dict:
     s = get_settings()
-    if not (s.instagram_business_id and s.facebook_page_token) or not post.poster_png:
+    published = httpx.post(_meta(f"{s.instagram_business_id}/media_publish"), timeout=60,
+                           data={"creation_id": container, "access_token": s.facebook_page_token})
+    ok = published.status_code == 200 and "id" in published.json()
+    return {"ok": ok, **({} if ok else {"error": _meta_error(published)})}
+
+
+def post_instagram(post: ContentPost, has_video: bool = False) -> dict | None:
+    s = get_settings()
+    if not (s.instagram_business_id and s.facebook_page_token):
         return None
-    image_url = f"{s.public_base_url.rstrip('/')}/content/poster/{post.public_token}.png"
+    base = _meta(f"{s.instagram_business_id}/media")
+    video_error = None
     try:
-        created = httpx.post(_meta(f"{s.instagram_business_id}/media"), timeout=60,
-                             data={"image_url": image_url, "caption": post.caption[:2200],
-                                   "access_token": s.facebook_page_token})
+        if has_video:                                   # Reel: create the container, wait until Instagram has processed it
+            created = httpx.post(base, timeout=60, data={
+                "media_type": "REELS", "video_url": _public(post, "video", "mp4"), "share_to_feed": "true",
+                "caption": post.caption[:2200], "access_token": s.facebook_page_token})
+            container = created.json().get("id")
+            if created.status_code == 200 and container:
+                for _ in range(18):
+                    time.sleep(10)
+                    status = httpx.get(_meta(container), timeout=30,
+                                       params={"fields": "status_code", "access_token": s.facebook_page_token}).json().get("status_code")
+                    if status == "FINISHED":
+                        return {**_ig_publish(container), "type": "reel"}
+                    if status in ("ERROR", "EXPIRED"):
+                        video_error = f"processing {status}"
+                        break
+                else:
+                    video_error = "processing timed out"
+            else:
+                video_error = _meta_error(created)
+        if not post.poster_png:
+            return {"ok": False, "error": video_error or "no image"}
+        created = httpx.post(base, timeout=60, data={"image_url": _public(post, "poster", "png"),
+                                                     "caption": post.caption[:2200], "access_token": s.facebook_page_token})
         container = created.json().get("id")
         if created.status_code != 200 or not container:
-            return {"ok": False, "error": _meta_error(created)}
+            return {"ok": False, "error": _meta_error(created), **({"video_error": video_error} if video_error else {})}
         time.sleep(6)
-        published = httpx.post(_meta(f"{s.instagram_business_id}/media_publish"), timeout=60,
-                               data={"creation_id": container, "access_token": s.facebook_page_token})
-        ok = published.status_code == 200 and "id" in published.json()
-        return {"ok": ok, **({} if ok else {"error": _meta_error(published)})}
+        out = {**_ig_publish(container), "type": "photo"}
+        if video_error:
+            out["video_error"] = video_error
+        return out
     except Exception as exc:
         logger.error("instagram post failed: %s", type(exc).__name__)
         return {"ok": False, "error": type(exc).__name__}
@@ -291,11 +337,14 @@ def post_instagram(post: ContentPost) -> dict | None:
 def deliver(db: Session, post: ContentPost) -> dict:
     """Owner copy (Telegram) first, then the social accounts that are configured."""
     result: dict = {}
+    video = db.scalar(select(ContentVideo).where(ContentVideo.post_id == post.id))
     summary = f"📣 आजचा मजकूर तयार\n\n{post.caption}\n\n{post.script}"
     if post.poster_png:
         result["telegram_photo"] = communication_agent.notify_admin_photo(post.poster_png, post.headline[:200])
+    if video:
+        result["telegram_video"] = communication_agent.notify_admin_video(video.mp4, post.headline[:200])
     result["telegram_text"] = communication_agent.notify_admin(summary)
-    facebook, instagram = post_facebook(post), post_instagram(post)
+    facebook, instagram = post_facebook(post, bool(video)), post_instagram(post, bool(video))
     if facebook is not None:
         result["facebook"] = facebook
     if instagram is not None:
@@ -316,10 +365,11 @@ def generate_today(db: Session, force: bool = False) -> ContentPost:
     topic = pick_topic(db, today)
     poster, poster_error = None, None
     short_link = link.replace("https://", "").replace("http://", "")
+    background = _ai_background(db)
     try:
         try:
             poster = poster_pro.render_poster_pro(topic["headline"], topic.get("card_points") or topic["points"],
-                                                  topic.get("note"), short_link, topic.get("rows"), _ai_background(db))
+                                                  topic.get("note"), short_link, topic.get("rows"), background)
         except poster_pro.PosterUnavailable:
             raise
         except Exception as exc:                      # pro layout failed: fall back to the simple poster
@@ -336,6 +386,11 @@ def generate_today(db: Session, force: bool = False) -> ContentPost:
     db.add(post)
     db.commit()
     db.refresh(post)
+    if s.content_video and poster_error is None:
+        made = video_agent.make_video(topic["headline"], topic["points"], topic.get("rows"), short_link, background)
+        if made:
+            db.add(ContentVideo(post_id=post.id, mp4=made[0], seconds=made[1]))
+            db.commit()
     deliver(db, post)
     for old in db.scalars(select(ContentPost).where(ContentPost.post_date < today - timedelta(days=45))):
         db.delete(old)

@@ -47,6 +47,7 @@ sends them to your Telegram. Topics are limited to features that really exist; "
 the last 24 hours. If `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_TOKEN` and `INSTAGRAM_BUSINESS_ID` are set, it also posts to the Page and
 Instagram (one post a day). `POST /admin/content/run?force=true` makes one now, `GET /admin/content/latest` shows the last 7.
 Posters use a sunset construction-site look; with `CONTENT_AI_BACKGROUND=true` an AI picture (no text in it) is used as background. After setting the bot token run `POST /admin/telegram-webhook` once: then typing `/poster` or `/status` to your bot works.
+A ~20-second vertical video (720x1280) is made the same way and sent to Telegram; with the Meta settings it is posted as an Instagram Reel / Facebook video. Voice-over needs `GOOGLE_TTS_API_KEY`; without it the video is silent. Rendering uses ffmpeg (bundled via `imageio-ffmpeg`).
 YouTube is not automated: API uploads stay private until Google audits the project.
 
 ## Business rules (enforced in `database.check_access`)

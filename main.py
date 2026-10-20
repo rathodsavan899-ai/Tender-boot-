@@ -22,7 +22,7 @@ from agents import (analyzer_agent, bg_emd_agent, chat_agent, communication_agen
                     payment_delay_agent, scraper_agent, tax_agent, tender_hunter_agent, vault_agent, content_agent)
 from config import get_settings
 from pwa import router as pwa_router
-from database import (AuthSession, Contractor, ContentPost, TenderSource, VaultDocument, PaymentBill, SessionLocal, Submission, Tender, check_access, get_db,
+from database import (AuthSession, Contractor, ContentPost, ContentVideo, TenderSource, VaultDocument, PaymentBill, SessionLocal, Submission, Tender, check_access, get_db,
                       get_or_create_contractor, init_db, normalize_phone, utcnow)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -1055,6 +1055,16 @@ def content_poster(token: str, db: Session = Depends(get_db)) -> Response:
     if post is None or not post.poster_png:
         raise HTTPException(404)
     return Response(post.poster_png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/content/video/{token}.mp4", include_in_schema=False)
+def content_video(token: str, db: Session = Depends(get_db)) -> Response:
+    """Public by design (Instagram/Facebook fetch the video from here); the token is unguessable."""
+    post = db.scalar(select(ContentPost).where(ContentPost.public_token == token))
+    video = db.scalar(select(ContentVideo).where(ContentVideo.post_id == post.id)) if post else None
+    if video is None:
+        raise HTTPException(404)
+    return Response(video.mp4, media_type="video/mp4", headers={"Cache-Control": "public, max-age=3600"})
 
 
 @app.post("/admin/run-hunter", dependencies=[Depends(require_admin)])
