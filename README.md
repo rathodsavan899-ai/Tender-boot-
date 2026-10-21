@@ -48,6 +48,12 @@ the last 24 hours. If `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_TOKEN` and `INSTAGRAM_B
 Instagram (one post a day). `POST /admin/content/run?force=true` makes one now, `GET /admin/content/latest` shows the last 7.
 Posters use a sunset construction-site look; with `CONTENT_AI_BACKGROUND=true` an AI picture (no text in it) is used as background. After setting the bot token run `POST /admin/telegram-webhook` once: then typing `/poster` or `/status` to your bot works.
 A ~20-second vertical video (720x1280) is made the same way and sent to Telegram; with the Meta settings it is posted as an Instagram Reel / Facebook video. Voice-over needs `GOOGLE_TTS_API_KEY`; without it the video is silent. Rendering uses ffmpeg (bundled via `imageio-ffmpeg`).
+## Orchestrator (chief manager)
+`orchestrator_agent` checks every agent, acts as the fail-safe co-pilot and sends a nightly report (21:00 IST) to Telegram
+(`GET /admin/report`, or `/status` in Telegram). Backups: stale tender crawl is re-run (and the backup URL is used); a missing
+daily post is re-made without the video; a stuck post is re-sent; each problem alerts the owner once a day.
+An honesty guard blocks social posting if the caption has banned claims (guarantees, win rates, store badges, "first in India").
+It never changes the database schema or keys, and portal submission with the DSC always waits for the owner.
 YouTube is not automated: API uploads stay private until Google audits the project.
 
 ## Business rules (enforced in `database.check_access`)

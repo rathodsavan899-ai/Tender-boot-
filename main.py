@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from agents import LLMUnavailable, format_inr, llm_available
 from agents import (analyzer_agent, bg_emd_agent, chat_agent, communication_agent, competitor_agent, marketplace_agent,
-                    payment_delay_agent, scraper_agent, tax_agent, tender_hunter_agent, vault_agent, content_agent)
+                    payment_delay_agent, scraper_agent, tax_agent, tender_hunter_agent, vault_agent, content_agent, orchestrator_agent)
 from config import get_settings
 from pwa import router as pwa_router
 from database import (AuthSession, Contractor, ContentPost, ContentVideo, TenderSource, VaultDocument, PaymentBill, SessionLocal, Submission, Tender, check_access, get_db,
@@ -53,6 +53,16 @@ async def _hunter_loop() -> None:
         await asyncio.sleep(max(settings.hunter_interval_hours, 1) * 3600)
 
 
+async def _copilot_loop() -> None:
+    await asyncio.sleep(300)
+    while True:
+        try:
+            await asyncio.to_thread(orchestrator_agent.tick)
+        except Exception:
+            logger.exception("co-pilot run failed")
+        await asyncio.sleep(1800)
+
+
 async def _content_loop() -> None:
     await asyncio.sleep(120)
     while True:
@@ -68,7 +78,8 @@ async def lifespan(_: FastAPI):
     init_db()
     tender_hunter_agent.seed_default_sources()
     tasks = [asyncio.create_task(_vault_loop()), asyncio.create_task(_hunter_loop()),
-                                  asyncio.create_task(_content_loop())] if settings.enable_scheduler else []
+                                  asyncio.create_task(_content_loop()),
+                                  asyncio.create_task(_copilot_loop())] if settings.enable_scheduler else []
     yield
     for task in tasks:
         task.cancel()
@@ -1001,11 +1012,7 @@ def _tg_secret() -> str:
 
 def _status_text() -> str:
     with SessionLocal() as db:
-        total = db.scalar(select(func.count(Tender.id))) or 0
-        today_new = db.scalar(select(func.count(Tender.id)).where(Tender.created_at >= utcnow() - timedelta(hours=24))) or 0
-        down = [s.name for s in db.scalars(select(TenderSource)) if s.status == "down"]
-    return (f"📊 स्थिती\nएकूण टेंडर: {total}\nगेल्या २४ तासांत नवे: {today_new}\n"
-            + ("⚠️ बंद स्रोत: " + ", ".join(down) if down else "✅ सर्व स्रोत चालू"))
+        return orchestrator_agent.report_text(db)
 
 
 @app.post("/telegram-webhook/{secret}", include_in_schema=False)
@@ -1032,6 +1039,19 @@ async def telegram_webhook(secret: str, request: Request, background: Background
 def admin_set_telegram_webhook() -> dict:
     """Run once after TELEGRAM_BOT_TOKEN is set: connects the bot so /poster and /status work."""
     return communication_agent.telegram_set_webhook(f"{settings.public_base_url.rstrip('/')}/telegram-webhook/{_tg_secret()}")
+
+
+@app.get("/admin/report", dependencies=[Depends(require_admin)])
+def admin_report(db: Session = Depends(get_db)) -> dict:
+    """The same consolidated health report that is sent to Telegram every night (and on /status)."""
+    return {"text": orchestrator_agent.report_text(db),
+            "agents": [{"name": n, "status": st, "detail": msg} for n, st, msg in orchestrator_agent.collect(db)]}
+
+
+@app.post("/admin/copilot-run", dependencies=[Depends(require_admin)])
+def admin_copilot_run(background: BackgroundTasks) -> dict:
+    background.add_task(orchestrator_agent.tick)
+    return {"started": True}
 
 
 @app.post("/admin/content/run", dependencies=[Depends(require_admin)])

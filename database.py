@@ -210,6 +210,17 @@ class PosterBackground(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class AgentEvent(Base):
+    """'Already told the owner today' markers (alerts and the daily report are sent once per day, even after restarts)."""
+
+    __tablename__ = "agent_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), index=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ContentVideo(Base):
     """The daily vertical video (kept in the database so Instagram/Facebook can fetch it from a public link)."""
 

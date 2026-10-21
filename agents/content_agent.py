@@ -251,6 +251,16 @@ def _public(post: ContentPost, kind: str, ext: str) -> str:
     return f"{get_settings().public_base_url.rstrip('/')}/content/{kind}/{post.public_token}.{ext}"
 
 
+# Honest-marketing guard: phrases we never publish (fake win rates, store badges we do not have, "first in India" claims...).
+BANNED_PHRASES = ["guarantee", "100%", "win rate", "win probability", "success rate", "india's first", "number 1",
+                  "google play", "app store", "जिंकण्याची हमी", "हमी", "नक्की मिळेल", "भारतातील पहिले", "पहिला ai", "नंबर १"]
+
+
+def honesty_violations(text: str) -> list[str]:
+    lowered = text.lower()
+    return [p for p in BANNED_PHRASES if p in lowered]
+
+
 def post_facebook(post: ContentPost, has_video: bool = False) -> dict | None:
     s = get_settings()
     if not (s.facebook_page_id and s.facebook_page_token):
@@ -334,8 +344,8 @@ def post_instagram(post: ContentPost, has_video: bool = False) -> dict | None:
         return {"ok": False, "error": type(exc).__name__}
 
 
-def deliver(db: Session, post: ContentPost) -> dict:
-    """Owner copy (Telegram) first, then the social accounts that are configured."""
+def deliver(db: Session, post: ContentPost, violations: list[str] | None = None) -> dict:
+    """Owner copy (Telegram) first, then the social accounts that are configured (unless the honesty guard blocked it)."""
     result: dict = {}
     video = db.scalar(select(ContentVideo).where(ContentVideo.post_id == post.id))
     summary = f"📣 आजचा मजकूर तयार\n\n{post.caption}\n\n{post.script}"
@@ -344,7 +354,13 @@ def deliver(db: Session, post: ContentPost) -> dict:
     if video:
         result["telegram_video"] = communication_agent.notify_admin_video(video.mp4, post.headline[:200])
     result["telegram_text"] = communication_agent.notify_admin(summary)
-    facebook, instagram = post_facebook(post, bool(video)), post_instagram(post, bool(video))
+    if violations:
+        result["honesty_blocked"] = violations
+        communication_agent.notify_admin("🛑 पोस्ट सोशल मीडियावर टाकली नाही: कॅप्शनमध्ये मर्यादित/दिशाभूल करणारे शब्द आढळले: "
+                                         + ", ".join(violations))
+        facebook = instagram = None
+    else:
+        facebook, instagram = post_facebook(post, bool(video)), post_instagram(post, bool(video))
     if facebook is not None:
         result["facebook"] = facebook
     if instagram is not None:
@@ -355,7 +371,7 @@ def deliver(db: Session, post: ContentPost) -> dict:
     return result
 
 
-def generate_today(db: Session, force: bool = False) -> ContentPost:
+def generate_today(db: Session, force: bool = False, with_video: bool = True) -> ContentPost:
     today = ist_today()
     existing = db.scalar(select(ContentPost).where(ContentPost.post_date == today).order_by(ContentPost.id.desc()))
     if existing is not None and not force:
@@ -386,22 +402,24 @@ def generate_today(db: Session, force: bool = False) -> ContentPost:
     db.add(post)
     db.commit()
     db.refresh(post)
-    if s.content_video and poster_error is None:
+    if with_video and s.content_video and poster_error is None:
         made = video_agent.make_video(topic["headline"], topic["points"], topic.get("rows"), short_link, background)
         if made:
             db.add(ContentVideo(post_id=post.id, mp4=made[0], seconds=made[1]))
             db.commit()
-    deliver(db, post)
+    static_text = " ".join([topic["headline"], topic.get("note") or ""] + (
+        topic.get("card_points") or (topic["points"] if topic["kind"] == "feature" else [])))
+    deliver(db, post, honesty_violations(static_text))
     for old in db.scalars(select(ContentPost).where(ContentPost.post_date < today - timedelta(days=45))):
         db.delete(old)
     db.commit()
     return post
 
 
-def run_daily_job(force: bool = False) -> dict:
+def run_daily_job(force: bool = False, with_video: bool = True) -> dict:
     """Scheduler entry: runs once per IST day, after CONTENT_HOUR_IST."""
     if not force and datetime.now(IST).hour < get_settings().content_hour_ist:
         return {"skipped": "too early"}
     with SessionLocal() as db:
-        post = generate_today(db, force=force)
+        post = generate_today(db, force=force, with_video=with_video)
         return {"post_id": post.id, "status": post.status, "topic": post.topic_key}
