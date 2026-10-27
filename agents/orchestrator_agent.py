@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from agents import communication_agent, content_agent, logger, tender_hunter_agent
+from agents import communication_agent, content_agent, logger, meta_agent, tender_hunter_agent
 from config import get_settings
 from database import AgentEvent, ContentPost, ContentVideo, SessionLocal, Tender, TenderSource, utcnow
 
@@ -20,7 +20,17 @@ HUNTER_STALE_HOURS = 8
 RERUN_PAUSE_MINUTES = 60
 DRAFT_STUCK_MINUTES = 15
 REPORT_HOUR_IST = 21
+PING_FRESH_MINUTES = 20
 ICON = {"OK": "✅", "WARN": "⚠️", "FAIL": "❌", "NA": "➖"}
+LANGS = (("mr", "मराठी"), ("en", "English"))
+
+_last_ping: datetime | None = None
+
+
+def note_ping() -> None:
+    """Called by /ping (the uptime pinger). Lets the report show whether the 'never sleep' ping really arrives."""
+    global _last_ping
+    _last_ping = utcnow()
 
 
 def _once(db: Session, key: str) -> bool:
@@ -42,9 +52,14 @@ def _hour_ist() -> int:
     return datetime.now(content_agent.IST).hour
 
 
-def _today_post(db: Session) -> ContentPost | None:
-    return db.scalar(select(ContentPost).where(ContentPost.post_date == content_agent.ist_today())
-                     .order_by(ContentPost.id.desc()))
+def _today_posts(db: Session) -> dict[str, ContentPost]:
+    """Today's real post per language (the owner's manual /poster test posts are ignored)."""
+    rows = db.scalars(select(ContentPost).where(ContentPost.post_date == content_agent.ist_today(),
+                                                ContentPost.status != "test").order_by(ContentPost.id.desc()))
+    out: dict[str, ContentPost] = {}
+    for post in rows:
+        out.setdefault(post.lang or "mr", post)
+    return out
 
 
 # ------------------------------------------------------------------ checks
@@ -68,41 +83,71 @@ def check_hunter(db: Session) -> tuple[str, str]:
 
 def check_content(db: Session) -> tuple[str, str]:
     s = get_settings()
-    post = _today_post(db)
-    if post is None:
+    posts = _today_posts(db)
+    missing = [label for code, label in LANGS if code not in posts]
+    if missing:
         hour = _hour_ist()
         if hour >= s.content_hour_ist + 2:
-            return "FAIL", "आजची पोस्ट अजून बनली नाही"
+            return "FAIL", "आजची पोस्ट बनली नाही: " + ", ".join(missing)
         if hour >= s.content_hour_ist:
-            return "WARN", "आजची पोस्ट बनत आहे / उशीर"
+            return "WARN", "आजची पोस्ट बनत आहे / उशीर: " + ", ".join(missing)
         return "OK", f"सकाळी {s.content_hour_ist}:00 ला बनेल"
-    try:
-        delivery = json.loads(post.delivery or "{}")
-    except ValueError:
-        delivery = {}
-    has_video = db.scalar(select(ContentVideo.id).where(ContentVideo.post_id == post.id)) is not None
-    parts = ["पोस्टर ✔" if post.poster_png else "पोस्टर ✘", "व्हिडिओ ✔" if has_video else "व्हिडिओ ✘"]
-    problems = []
-    if post.status == "draft" and (utcnow() - post.created_at).total_seconds() > DRAFT_STUCK_MINUTES * 60:
-        problems.append("तयार झाली पण पाठवली गेली नाही")
-    if not (delivery.get("telegram_text") or {}).get("sent"):
-        problems.append("Telegram वर पोहोचली नाही")
-    for name in ("facebook", "instagram"):
-        result = delivery.get(name)
-        if isinstance(result, dict):
-            parts.append(f"{name} {'✔' if result.get('ok') else '✘'}")
-            if not result.get("ok"):
-                problems.append(f"{name}: {result.get('error', 'अयशस्वी')}")
-    if delivery.get("honesty_blocked"):
-        problems.append("दिशाभूल-तपासणीने सोशल पोस्टिंग थांबवली")
+    parts, problems = [], []
+    for code, label in LANGS:
+        post = posts[code]
+        try:
+            delivery = json.loads(post.delivery or "{}")
+        except ValueError:
+            delivery = {}
+        state = {"posted": "प्रकाशित", "scheduled": "वेळेवर प्रकाशनासाठी तयार", "sent": "Telegram वर", "draft": "तयार"}.get(post.status, post.status)
+        parts.append(f"{label}: पोस्टर {'✔' if post.poster_png else '✘'} ({state})")
+        age = (utcnow() - post.created_at).total_seconds()
+        if post.status == "draft" and age > DRAFT_STUCK_MINUTES * 60:
+            problems.append(f"{label} पोस्ट तयार झाली पण पाठवली गेली नाही")
+        if post.status == "scheduled" and post.publish_after and (utcnow() - post.publish_after).total_seconds() > DRAFT_STUCK_MINUTES * 60:
+            problems.append(f"{label} प्रकाशन उशीर")
+        if not (delivery.get("telegram_text") or {}).get("sent"):
+            problems.append(f"{label}: Telegram वर पोहोचली नाही")
+        for name in ("facebook", "instagram"):
+            result = delivery.get(name)
+            if isinstance(result, dict) and not result.get("ok"):
+                problems.append(f"{label} {name}: {result.get('error', 'अयशस्वी')}")
+        if delivery.get("honesty_blocked"):
+            problems.append(f"{label}: दिशाभूल-तपासणीने सोशल पोस्टिंग थांबवली")
+    marathi = posts["mr"]
+    has_video = db.scalar(select(ContentVideo.id).where(ContentVideo.post_id == marathi.id)) is not None
+    parts.append("व्हिडिओ ✔" if has_video else "व्हिडिओ ✘")
     return ("WARN" if problems else "OK"), " · ".join(parts + problems)
 
 
+def check_meta() -> tuple[str, str]:
+    info = meta_agent.health()
+    if not info.get("connected"):
+        return "NA", "Facebook/Instagram जोडलेले नाही (/admin/meta/connect)"
+    if info.get("valid") is False:
+        return "FAIL", "टोकन अवैध किंवा संपले: पुन्हा जोडा"
+    if info.get("missing_scopes"):
+        return "WARN", "परवानग्या कमी: " + ", ".join(info["missing_scopes"])
+    if not info.get("instagram_id"):
+        return "WARN", f"Page '{info.get('page_name')}' जोडले, पण Instagram Professional अकाउंट जोडलेले नाही"
+    return "OK", f"Page '{info.get('page_name')}' आणि Instagram जोडले"
+
+
+def check_uptime() -> tuple[str, str]:
+    if _last_ping is None:
+        return "WARN", "अजून एकही uptime पिंग मिळाला नाही; फुकट सर्व्हर झोपू शकतो (GitHub keep-alive तपासा)"
+    minutes = int((utcnow() - _last_ping).total_seconds() / 60)
+    if minutes > PING_FRESH_MINUTES:
+        return "WARN", f"शेवटचा पिंग {minutes} मिनिटांपूर्वी; सर्व्हर झोपू शकतो"
+    return "OK", f"शेवटचा पिंग {minutes} मिनिटांपूर्वी"
+
+
 def collect(db: Session) -> list[tuple[str, str, str]]:
-    hunter, content = check_hunter(db), check_content(db)
     return [
-        ("टेंडर शिकारी (Lead Hunter)", *hunter),
-        ("मार्केटिंग आणि व्हिडिओ", *content),
+        ("टेंडर शिकारी (Lead Hunter)", *check_hunter(db)),
+        ("मार्केटिंग: मराठी + English पोस्टर, व्हिडिओ", *check_content(db)),
+        ("Facebook / Instagram कनेक्शन", *check_meta()),
+        ("सर्व्हर जागा ठेवणे (uptime पिंग)", *check_uptime()),
         ("बिलिंग आणि ट्रायल", "NA", "Razorpay पेमेंट अजून बनलेले नाही (ट्रायल १५ दिवसांचे नियम चालू)"),
         ("ग्राहक-शोध", "NA", "बनवलेले नाही: अनोळखी लोकांना परवानगीशिवाय संपर्क करणार नाही"),
         ("DSC सबमिशन", "OK", "पोर्टल सबमिशन फक्त तुमच्या मंजुरीनंतर"),
@@ -134,24 +179,41 @@ def copilot_run() -> dict:
             if status != "OK":
                 _alert_once(db, "hunter-problem", f"{ICON[status]} टेंडर शिकारी: {msg}\nको-पायलटने पुन्हा प्रयत्न केला; अडचण अजून आहे. स्रोत तपासा.")
 
-        # 2) content: stuck draft -> deliver again; missing after the deadline -> lighter backup run (no video)
-        post = _today_post(db)
-        if post is not None and post.status == "draft" and (utcnow() - post.created_at).total_seconds() > DRAFT_STUCK_MINUTES * 60:
-            try:
-                content_agent.deliver(db, post)
-                actions.append("अडकलेली पोस्ट पुन्हा पाठवली")
-            except Exception as exc:
-                logger.error("copilot redelivery failed: %s", type(exc).__name__)
-        elif post is None and _hour_ist() >= s.content_hour_ist + 2:
-            try:
-                content_agent.generate_today(db, with_video=False)
-                actions.append("बॅकअप पोस्ट (व्हिडिओशिवाय) बनवली")
-            except Exception as exc:
-                _alert_once(db, "content-failed", f"❌ आजची पोस्ट बनली नाही ({type(exc).__name__}). Render Logs तपासा.")
-
+        # 2) content: publish what is due, re-send stuck posts, and make a missing post with a lighter backup (no video)
+        try:
+            due = content_agent.publish_due(db)
+            if due:
+                actions.append("वेळ झालेली पोस्ट प्रकाशित केली")
+        except Exception as exc:
+            logger.error("copilot publish_due failed: %s", type(exc).__name__)
+        posts = _today_posts(db)
+        for post in posts.values():
+            if post.status == "draft" and (utcnow() - post.created_at).total_seconds() > DRAFT_STUCK_MINUTES * 60:
+                try:
+                    content_agent.deliver(db, post)
+                    actions.append("अडकलेली पोस्ट पुन्हा पाठवली")
+                except Exception as exc:
+                    logger.error("copilot redelivery failed: %s", type(exc).__name__)
+        if _hour_ist() >= s.content_hour_ist + 2:
+            for code, label in LANGS:
+                if code not in posts:
+                    try:
+                        content_agent.generate_today(db, with_video=False, lang=code)
+                        actions.append(f"बॅकअप पोस्ट ({label}, व्हिडिओशिवाय) बनवली")
+                    except Exception as exc:
+                        db.rollback()
+                        _alert_once(db, f"content-failed-{code}", f"❌ आजची {label} पोस्ट बनली नाही ({type(exc).__name__}). Render Logs तपासा.")
         status, msg = check_content(db)
         if status in ("WARN", "FAIL"):
             _alert_once(db, "content-problem", f"{ICON[status]} मार्केटिंग: {msg}")
+
+        # 3) Facebook/Instagram token health (once a day alert)
+        try:
+            status, msg = check_meta()
+            if status in ("FAIL", "WARN"):
+                _alert_once(db, "meta-problem", f"{ICON[status]} Facebook/Instagram: {msg}")
+        except Exception as exc:
+            logger.error("meta health check failed: %s", type(exc).__name__)
     return {"actions": actions}
 
 

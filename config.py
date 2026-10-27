@@ -57,6 +57,15 @@ class Settings(BaseSettings):
     content_hour_ist: int = 8
     content_ai_background: bool = False
     content_video: bool = True
+    lead_whatsapp_number: str = "917028352281"
+    english_post_delay_hours: int = 5
+    meta_app_id: str = ""
+    meta_app_secret: str = ""
+    video_provider: str = "local"            # local (built-in ffmpeg video) | heygen (AI avatar video, falls back to local)
+    heygen_api_key: str = ""
+    heygen_avatar_id: str = ""
+    heygen_voice_id_mr: str = ""
+    heygen_timeout_minutes: int = 10
     google_tts_api_key: str = ""
     google_tts_voice: str = "mr-IN-Wavenet-A"
     openai_image_model: str = "gpt-image-1"

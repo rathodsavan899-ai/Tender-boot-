@@ -106,6 +106,7 @@ class Tender(Base):
     emd_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     closing_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    state: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -221,6 +222,19 @@ class AgentEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class MetaConnection(Base):
+    """Facebook Page + linked Instagram account. The Page token is stored encrypted (Fernet) and never shown again."""
+
+    __tablename__ = "meta_connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    page_id: Mapped[str] = mapped_column(String(40))
+    page_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    instagram_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    page_token_enc: Mapped[str] = mapped_column(Text)
+    connected_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ContentVideo(Base):
     """The daily vertical video (kept in the database so Instagram/Facebook can fetch it from a public link)."""
 
@@ -247,7 +261,9 @@ class ContentPost(Base):
     script: Mapped[str] = mapped_column(Text)
     poster_png: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     public_token: Mapped[str] = mapped_column(String(40), index=True)
-    status: Mapped[str] = mapped_column(String(10), default="draft")  # draft | sent | posted
+    lang: Mapped[str] = mapped_column(String(5), default="mr")  # mr | en
+    publish_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(10), default="draft")  # draft | scheduled | sent | posted
     delivery: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -349,6 +365,13 @@ def _ensure_columns() -> None:
                 conn.execute(text(f"ALTER TABLE contractors ADD COLUMN {name} {ddl}"))
         if "closing_date" not in tender_cols:
             conn.execute(text("ALTER TABLE tenders ADD COLUMN closing_date DATE"))
+        if "state" not in tender_cols:
+            conn.execute(text("ALTER TABLE tenders ADD COLUMN state VARCHAR(100)"))
+        post_cols = {c["name"] for c in inspect(engine).get_columns("content_posts")}
+        if "lang" not in post_cols:
+            conn.execute(text("ALTER TABLE content_posts ADD COLUMN lang VARCHAR(5) DEFAULT 'mr'"))
+        if "publish_after" not in post_cols:
+            conn.execute(text("ALTER TABLE content_posts ADD COLUMN publish_after TIMESTAMP"))
 
 
 def get_db() -> Iterator[Session]:

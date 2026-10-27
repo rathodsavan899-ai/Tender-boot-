@@ -9,22 +9,25 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import secrets
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from agents import communication_agent, logger, poster_pro, video_agent
+from agents import communication_agent, logger, meta_agent, poster_pro, video_agent
 from config import get_settings
 from database import AwardedTender, ContentPost, ContentVideo, PosterBackground, SessionLocal, Tender, utcnow
 
 FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 IST = timezone(timedelta(hours=5, minutes=30))
 HASHTAGS = "#टेंडर #कंत्राटदार #महाराष्ट्र #सिव्हिल #PWD #TenderBotAI"
+HASHTAGS_EN = "#Tenders #Contractors #India #Infrastructure #CivilContractor #TenderBotAI"
 MIN_AWARDED_FOR_BID_POST = 20
 
 TOPICS = [
@@ -53,6 +56,26 @@ TOPICS = [
      "headline": "१५ दिवस मोफत वापरून पाहा",
      "points": ["टेंडर शोध, पात्रता, GST हिशोब", "कागदपत्र व्हॉल्ट आणि AI सहाय्यक", "सुरू करण्यासाठी फक्त मोबाइल नंबर"]},
 ]
+
+
+TOPICS_EN = {
+    "search": {"screen": "Tender search", "headline": "Find new tenders in one place",
+               "points": ["New tenders collected from public portals", "Search by keyword, district and value", "Closing date at a glance"]},
+    "eligibility": {"screen": "Eligibility check", "headline": "Know which document is missing before you bid",
+                    "points": ["Match your documents with the tender's requirements", "Check class and turnover conditions", "Avoid filing the wrong tender"]},
+    "approval": {"screen": "Submission approval", "headline": "Nothing is submitted without your OK",
+                 "points": ["You review and approve the bid amount", "Simple yes / no inside the app", "Clear status at every step"]},
+    "vault": {"screen": "Document vault", "headline": "All your documents in one secure place",
+              "points": ["Upload Aadhaar, GST, PAN and PWD registration", "Files are stored encrypted", "Expiring documents show on your home screen"]},
+    "gst": {"screen": "GST advice", "headline": "GST and ITC calculations made simple",
+            "points": ["See GST payable on the taxable value", "Eligible ITC deducted for the net payable", "CA-ready breakdown you can share"]},
+    "chat": {"screen": "AI assistant", "headline": "Ask the AI assistant your tender questions",
+             "points": ["Which documents does this tender need?", "Questions on GST, ITC and tender conditions", "Answers based on your own documents"]},
+    "bid": {"screen": "Bid rate", "headline": "Estimated L1 rate from past results",
+            "points": ["Based on public award data", "Add your cost to see profit", "Says clearly when data is thin"]},
+    "trial": {"screen": "Home", "headline": "Try it free for 15 days",
+              "points": ["Tender search, eligibility and GST calculations", "Document vault and AI assistant", "Start with just your mobile number"]},
+}
 
 
 class PosterUnavailable(RuntimeError):
@@ -169,32 +192,51 @@ def _topic_allowed(db: Session, topic: dict) -> bool:
     return True
 
 
-def _tender_topic(db: Session) -> dict | None:
-    """'Tender of the day' built only from tenders really found in the last 24 hours."""
+def _tender_topic(db: Session, lang: str = "mr") -> dict | None:
+    """'Tender of the day' built only from tenders really found in the last 24 hours.
+
+    Marathi poster: Maharashtra tenders. English poster: tenders from the other states in the all-India source."""
     since = utcnow() - timedelta(hours=24)
-    rows = list(db.scalars(select(Tender).where(
-        Tender.created_at >= since, (Tender.closing_date.is_(None)) | (Tender.closing_date >= ist_today()))
-        .order_by(Tender.created_at.desc())))
+    stmt = select(Tender).where(Tender.created_at >= since,
+                                or_(Tender.closing_date.is_(None), Tender.closing_date >= ist_today()))
+    if lang == "mr":
+        stmt = stmt.where(or_(Tender.state.is_(None), Tender.state == "Maharashtra"))
+    else:
+        stmt = stmt.where(Tender.state.is_not(None), Tender.state != "Maharashtra")
+    rows = list(db.scalars(stmt.order_by(Tender.created_at.desc())))
     if not rows:
         return None
     points, shown = [], []
     for t in rows[:3]:
         title = t.title if len(t.title) <= 64 else t.title[:61] + "…"
         date_text = t.closing_date.strftime("%d/%m") if t.closing_date else None
-        points.append((f"{date_text} पर्यंत — " if date_text else "") + title)
-        shown.append({"title": title, "date": date_text})
-    return {"key": "tender_of_day", "kind": "tender", "screen": "टेंडर शोध", "points": points, "rows": shown,
-            "card_points": ["सार्वजनिक पोर्टलवरून गोळा केलेले", "शेवटची तारीख एका नजरेत", "ॲपमध्ये पात्रता तपासा"],
-            "headline": f"आज {len(rows)} नवे टेंडर सापडले", "note": "स्रोत: CPPP सार्वजनिक यादी. अधिकृत माहिती पोर्टलवर तपासा."}
+        if lang == "mr":
+            points.append((f"{date_text} पर्यंत — " if date_text else "") + title)
+        else:
+            points.append(f"{title} ({t.state})" + (f" — closes {date_text}" if date_text else ""))
+        shown.append({"title": title if lang == "mr" else f"{title} ({t.state})", "date": date_text})
+    if lang == "mr":
+        return {"key": "tender_of_day", "kind": "tender", "screen": "टेंडर शोध", "points": points, "rows": shown,
+                "card_points": ["सार्वजनिक पोर्टलवरून गोळा केलेले", "शेवटची तारीख एका नजरेत", "ॲपमध्ये पात्रता तपासा"],
+                "headline": f"महाराष्ट्रात आज {len(rows)} नवे टेंडर सापडले",
+                "note": "स्रोत: CPPP सार्वजनिक यादी. अधिकृत माहिती पोर्टलवर तपासा."}
+    return {"key": "tender_of_day", "kind": "tender", "screen": "Tender search", "points": points, "rows": shown,
+            "card_points": ["Collected from public portals", "Closing date at a glance", "Check eligibility in the app"],
+            "headline": f"{len(rows)} new tenders found across India today",
+            "note": "Source: CPPP public list. Check the official portal for details."}
 
 
-def pick_topic(db: Session, today: date) -> dict:
+def pick_topic(db: Session, today: date, lang: str = "mr") -> dict:
     if today.toordinal() % 2 == 0:
-        tender_topic = _tender_topic(db)
+        tender_topic = _tender_topic(db, lang)
         if tender_topic:
             return tender_topic
     allowed = [t for t in TOPICS if _topic_allowed(db, t)]
-    return {**allowed[(today.toordinal() // 2) % len(allowed)], "kind": "feature", "note": None}
+    base = allowed[(today.toordinal() // 2 + (3 if lang == "en" else 0)) % len(allowed)]
+    topic = {**base, "kind": "feature", "note": None}
+    if lang == "en":
+        topic.update(TOPICS_EN[base["key"]])
+    return topic
 
 
 def _ai_background(db: Session) -> bytes | None:
@@ -220,18 +262,40 @@ def _ai_background(db: Session) -> bytes | None:
     return stored[ist_today().toordinal() % len(stored)].png if stored else None
 
 
-def build_caption(topic: dict, link: str) -> str:
+def lead_link(lang: str) -> tuple[str, str]:
+    """(wa.me link with a ready message, the 10-digit number). The number comes from LEAD_WHATSAPP_NUMBER."""
+    number = re.sub(r"\D", "", get_settings().lead_whatsapp_number)
+    text = "मला TenderBot AI ची APK फाईल पाहिजे आहे" if lang == "mr" else "I want the TenderBot AI APK file"
+    return f"https://wa.me/{number}?text={quote(text, safe='')}", number[-10:]
+
+
+def build_caption(topic: dict, link: str, lang: str = "mr") -> str:
     bullets = "\n".join(f"✅ {p}" for p in topic["points"])
     note = f"\n\n{topic['note']}" if topic.get("note") else ""
-    return f"{topic['headline']}\n\n{bullets}{note}\n\n📲 TenderBot AI — १५ दिवस मोफत ट्रायल\n{link}\n\n{HASHTAGS}"
+    wa, pretty = lead_link(lang)
+    if lang == "mr":
+        return (f"{topic['headline']}\n\n{bullets}{note}\n\n"
+                "📲 TenderBot AI कंत्राटदारांचे काम सोपे करते: नवे टेंडर एका जागी, कागदपत्रांची पात्रता तपासणी, "
+                "सुरक्षित कागदपत्र व्हॉल्ट आणि GST हिशोब, सगळे मोबाइलवर.\n"
+                f"✅ १५ दिवस मोफत ट्रायल: {link}\n💬 APK / माहितीसाठी WhatsApp: {pretty}\n👉 {wa}\n"
+                f"(लवकरच: WhatsApp वर टेंडर अलर्ट)\n\n{HASHTAGS}")
+    return (f"{topic['headline']}\n\n{bullets}{note}\n\n"
+            "📲 TenderBot AI makes a contractor's work easier: new tenders in one place, an eligibility check, "
+            "a secure document vault and GST calculations, all on your phone.\n"
+            f"✅ 15-day free trial: {link}\n💬 WhatsApp for the APK / details: {pretty}\n👉 {wa}\n"
+            f"(Coming soon: tender alerts on WhatsApp)\n\n{HASHTAGS_EN}")
 
 
-def build_script(topic: dict, link_text: str) -> str:
+def build_script(topic: dict, link_text: str, lang: str = "mr") -> str:
     body = " ".join(topic["points"])
-    return (f"🎬 ३० सेकंदांचा व्हिडिओ (स्क्रीन: {topic['screen']})\n"
-            f"०-५ से (हुक): {topic['headline']}\n"
-            f"५-२० से (स्क्रीन रेकॉर्डिंगवर बोला): {body}\n"
-            f"२०-३० से (शेवट): TenderBot AI. १५ दिवस मोफत ट्रायल. लिंक वर्णनात: {link_text}")
+    _, pretty = lead_link(lang)
+    if lang == "mr":
+        return (f"🎬 ३० सेकंदांचा व्हिडिओ (स्क्रीन: {topic['screen']})\n"
+                f"०-४ से (हुक): {topic['headline']}\n"
+                f"४-२२ से (प्रत्येक मुद्दा ६ सेकंद): {body}\n"
+                f"२२-२९ से (शेवट): TenderBot AI. १५ दिवस मोफत ट्रायल. WhatsApp: {pretty}. {link_text}")
+    return (f"🎬 30-second video (screen: {topic['screen']})\n0-4s (hook): {topic['headline']}\n"
+            f"4-22s (6 seconds per point): {body}\n22-29s (end): TenderBot AI. 15-day free trial. WhatsApp: {pretty}. {link_text}")
 
 
 # ------------------------------------------------------------------ publishing
@@ -261,19 +325,43 @@ def honesty_violations(text: str) -> list[str]:
     return [p for p in BANNED_PHRASES if p in lowered]
 
 
+def _fb_reel(s, video_url: str, caption: str) -> tuple[bool, str | None]:
+    """Facebook Reel in three steps: start -> upload from our public video link -> finish and publish."""
+    try:
+        start = httpx.post(_meta(f"{s.facebook_page_id}/video_reels"), timeout=60,
+                           data={"upload_phase": "start", "access_token": s.facebook_page_token})
+        info = start.json()
+        video_id, upload_url = info.get("video_id"), info.get("upload_url")
+        if start.status_code != 200 or not (video_id and upload_url):
+            return False, _meta_error(start)
+        up = httpx.post(upload_url, timeout=180, headers={"Authorization": f"OAuth {s.facebook_page_token}", "file_url": video_url})
+        if up.status_code != 200:
+            return False, "upload " + _meta_error(up)
+        fin = httpx.post(_meta(f"{s.facebook_page_id}/video_reels"), timeout=60,
+                         data={"upload_phase": "finish", "video_id": video_id, "video_state": "PUBLISHED",
+                               "description": caption[:2200], "access_token": s.facebook_page_token})
+        body = fin.json()
+        return (fin.status_code == 200 and bool(body.get("success", True))), (None if fin.status_code == 200 else _meta_error(fin))
+    except Exception as exc:
+        return False, type(exc).__name__
+
+
 def post_facebook(post: ContentPost, has_video: bool = False) -> dict | None:
-    s = get_settings()
+    s = meta_agent.credentials()
     if not (s.facebook_page_id and s.facebook_page_token):
         return None
     video_error = None
     try:
         if has_video:
+            reel_ok, video_error = _fb_reel(s, _public(post, "video", "mp4"), post.caption)
+            if reel_ok:
+                return {"ok": True, "type": "reel"}
             r = httpx.post(_meta(f"{s.facebook_page_id}/videos"), timeout=120,
                            data={"file_url": _public(post, "video", "mp4"), "description": post.caption,
                                  "access_token": s.facebook_page_token})
             if r.status_code == 200 and "id" in r.json():
-                return {"ok": True, "type": "video"}
-            video_error = _meta_error(r)
+                return {"ok": True, "type": "video", "reel_error": video_error}
+            video_error = f"reel: {video_error}; video: {_meta_error(r)}"
         if post.poster_png:
             r = httpx.post(_meta(f"{s.facebook_page_id}/photos"), timeout=60,
                            data={"caption": post.caption, "access_token": s.facebook_page_token},
@@ -294,7 +382,7 @@ def post_facebook(post: ContentPost, has_video: bool = False) -> dict | None:
 
 
 def _ig_publish(container: str) -> dict:
-    s = get_settings()
+    s = meta_agent.credentials()
     published = httpx.post(_meta(f"{s.instagram_business_id}/media_publish"), timeout=60,
                            data={"creation_id": container, "access_token": s.facebook_page_token})
     ok = published.status_code == 200 and "id" in published.json()
@@ -302,7 +390,7 @@ def _ig_publish(container: str) -> dict:
 
 
 def post_instagram(post: ContentPost, has_video: bool = False) -> dict | None:
-    s = get_settings()
+    s = meta_agent.credentials()
     if not (s.instagram_business_id and s.facebook_page_token):
         return None
     base = _meta(f"{s.instagram_business_id}/media")
@@ -344,48 +432,90 @@ def post_instagram(post: ContentPost, has_video: bool = False) -> dict | None:
         return {"ok": False, "error": type(exc).__name__}
 
 
-def deliver(db: Session, post: ContentPost, violations: list[str] | None = None) -> dict:
-    """Owner copy (Telegram) first, then the social accounts that are configured (unless the honesty guard blocked it)."""
+def _notify_owner(db: Session, post: ContentPost) -> dict:
     result: dict = {}
     video = db.scalar(select(ContentVideo).where(ContentVideo.post_id == post.id))
-    summary = f"📣 आजचा मजकूर तयार\n\n{post.caption}\n\n{post.script}"
+    label = "🇮🇳 मराठी" if post.lang == "mr" else "🌐 English"
+    summary = f"📣 आजचा मजकूर तयार ({label})\n\n{post.caption}\n\n{post.script}"
     if post.poster_png:
-        result["telegram_photo"] = communication_agent.notify_admin_photo(post.poster_png, post.headline[:200])
+        result["telegram_photo"] = communication_agent.notify_admin_photo(post.poster_png, f"{label}: {post.headline}"[:200])
     if video:
-        result["telegram_video"] = communication_agent.notify_admin_video(video.mp4, post.headline[:200])
+        result["telegram_video"] = communication_agent.notify_admin_video(video.mp4, f"{label}: {post.headline}"[:200])
     result["telegram_text"] = communication_agent.notify_admin(summary)
+    return result
+
+
+def _post_social(db: Session, post: ContentPost) -> dict:
+    has_video = db.scalar(select(ContentVideo.id).where(ContentVideo.post_id == post.id)) is not None
+    out: dict = {}
+    facebook, instagram = post_facebook(post, has_video), post_instagram(post, has_video)
+    if facebook is not None:
+        out["facebook"] = facebook
+    if instagram is not None:
+        out["instagram"] = instagram
+    return out
+
+
+def _social_status(result: dict) -> str:
+    return "posted" if any(isinstance(v, dict) and v.get("ok") for k, v in result.items() if k in ("facebook", "instagram")) else "sent"
+
+
+def deliver(db: Session, post: ContentPost, violations: list[str] | None = None, publish: bool = True) -> dict:
+    """Owner copy (Telegram) first. Social posting: Marathi at once, English after a delay (so the page is not flooded),
+    and never when the honesty guard blocked the text or when this is a manual test run (publish=False)."""
+    result = _notify_owner(db, post)
     if violations:
         result["honesty_blocked"] = violations
-        communication_agent.notify_admin("🛑 पोस्ट सोशल मीडियावर टाकली नाही: कॅप्शनमध्ये मर्यादित/दिशाभूल करणारे शब्द आढळले: "
-                                         + ", ".join(violations))
-        facebook = instagram = None
+        communication_agent.notify_admin("🛑 पोस्ट सोशल मीडियावर टाकली नाही: दिशाभूल करणारे/मर्यादित शब्द आढळले: " + ", ".join(violations))
+        post.status = "sent"
+    elif not publish:
+        post.status = "test"                    # owner's manual /poster run: never published, never blocks the real daily post
+    elif post.lang == "en" and post.publish_after and post.publish_after > utcnow():
+        post.status = "scheduled"
     else:
-        facebook, instagram = post_facebook(post, bool(video)), post_instagram(post, bool(video))
-    if facebook is not None:
-        result["facebook"] = facebook
-    if instagram is not None:
-        result["instagram"] = instagram
+        result.update(_post_social(db, post))
+        post.status = _social_status(result)
     post.delivery = json.dumps(result, ensure_ascii=False, default=str)
-    post.status = "posted" if any(isinstance(v, dict) and v.get("ok") for k, v in result.items() if k in ("facebook", "instagram")) else "sent"
     db.commit()
     return result
 
 
-def generate_today(db: Session, force: bool = False, with_video: bool = True) -> ContentPost:
+def publish_due(db: Session) -> list[int]:
+    """Publish scheduled posts (the English poster) whose time has come."""
+    done = []
+    for post in list(db.scalars(select(ContentPost).where(ContentPost.status == "scheduled", ContentPost.publish_after <= utcnow()))):
+        try:
+            result = json.loads(post.delivery or "{}")
+        except ValueError:
+            result = {}
+        result.update(_post_social(db, post))
+        post.delivery = json.dumps(result, ensure_ascii=False, default=str)
+        post.status = _social_status(result)
+        db.commit()
+        done.append(post.id)
+    return done
+
+
+def generate_today(db: Session, force: bool = False, with_video: bool = True, lang: str = "mr",
+                   publish: bool = True) -> ContentPost:
     today = ist_today()
-    existing = db.scalar(select(ContentPost).where(ContentPost.post_date == today).order_by(ContentPost.id.desc()))
+    existing = db.scalar(select(ContentPost).where(ContentPost.post_date == today, ContentPost.lang == lang,
+                                                   ContentPost.status != "test").order_by(ContentPost.id.desc()))
     if existing is not None and not force:
         return existing
     s = get_settings()
     link = s.public_base_url.rstrip("/") + "/app"
-    topic = pick_topic(db, today)
-    poster, poster_error = None, None
     short_link = link.replace("https://", "").replace("http://", "")
+    _, pretty = lead_link(lang)
+    contact = f"WhatsApp: {pretty}"
+    topic = pick_topic(db, today, lang)
+    poster, poster_error = None, None
     background = _ai_background(db)
     try:
         try:
             poster = poster_pro.render_poster_pro(topic["headline"], topic.get("card_points") or topic["points"],
-                                                  topic.get("note"), short_link, topic.get("rows"), background)
+                                                  topic.get("note"), short_link, topic.get("rows"), background,
+                                                  lang=lang, contact=contact)
         except poster_pro.PosterUnavailable:
             raise
         except Exception as exc:                      # pro layout failed: fall back to the simple poster
@@ -395,21 +525,23 @@ def generate_today(db: Session, force: bool = False, with_video: bool = True) ->
     except (PosterUnavailable, poster_pro.PosterUnavailable) as exc:
         poster_error = str(exc)
         logger.warning("poster not generated: %s", poster_error)
-    post = ContentPost(post_date=today, kind=topic["kind"], topic_key=topic["key"], headline=topic["headline"],
-                       caption=build_caption(topic, link), script=build_script(topic, link), poster_png=poster,
-                       public_token=secrets.token_urlsafe(18), status="draft",
+    post = ContentPost(post_date=today, lang=lang, kind=topic["kind"], topic_key=topic["key"], headline=topic["headline"],
+                       caption=build_caption(topic, link, lang), script=build_script(topic, short_link, lang),
+                       poster_png=poster, public_token=secrets.token_urlsafe(18), status="draft",
+                       publish_after=(utcnow() + timedelta(hours=s.english_post_delay_hours)) if lang == "en" else None,
                        delivery=json.dumps({"poster_error": poster_error}) if poster_error else "")
     db.add(post)
     db.commit()
     db.refresh(post)
-    if with_video and s.content_video and poster_error is None:
-        made = video_agent.make_video(topic["headline"], topic["points"], topic.get("rows"), short_link, background)
+    if lang == "mr" and with_video and s.content_video and poster_error is None:
+        made = video_agent.make_video(topic["headline"], topic["points"], topic.get("rows"), short_link, background, contact)
         if made:
             db.add(ContentVideo(post_id=post.id, mp4=made[0], seconds=made[1]))
             db.commit()
-    static_text = " ".join([topic["headline"], topic.get("note") or ""] + (
-        topic.get("card_points") or (topic["points"] if topic["kind"] == "feature" else [])))
-    deliver(db, post, honesty_violations(static_text))
+    # honesty guard: everything we write ourselves (headline, note, fixed points, caption template) must be clean
+    static_caption = build_caption({**topic, "points": [] if topic["kind"] == "tender" else topic["points"]}, link, lang)
+    static_text = " ".join([topic["headline"], topic.get("note") or "", static_caption] + (topic.get("card_points") or []))
+    deliver(db, post, honesty_violations(static_text), publish=publish)
     for old in db.scalars(select(ContentPost).where(ContentPost.post_date < today - timedelta(days=45))):
         db.delete(old)
     db.commit()
@@ -417,9 +549,23 @@ def generate_today(db: Session, force: bool = False, with_video: bool = True) ->
 
 
 def run_daily_job(force: bool = False, with_video: bool = True) -> dict:
-    """Scheduler entry: runs once per IST day, after CONTENT_HOUR_IST."""
-    if not force and datetime.now(IST).hour < get_settings().content_hour_ist:
-        return {"skipped": "too early"}
+    """Scheduler entry: runs once per IST day after CONTENT_HOUR_IST; makes the Marathi and the English post.
+    A forced run (/poster) is for the owner only: it is NOT published to Facebook/Instagram."""
+    out: dict = {}
+    if not force:                                     # posts whose time has come (the English poster) go out first
+        with SessionLocal() as db:
+            due = publish_due(db)
+        if due:
+            out["published_due"] = due
+        if datetime.now(IST).hour < get_settings().content_hour_ist:
+            return {**out, "skipped": "too early"}
     with SessionLocal() as db:
-        post = generate_today(db, force=force, with_video=with_video)
-        return {"post_id": post.id, "status": post.status, "topic": post.topic_key}
+        for lang in ("mr", "en"):
+            try:
+                post = generate_today(db, force=force, with_video=with_video, lang=lang, publish=not force)
+                out[lang] = {"post_id": post.id, "status": post.status, "topic": post.topic_key}
+            except Exception as exc:               # one language failing must not stop the other
+                db.rollback()
+                logger.error("daily content (%s) failed: %s", lang, type(exc).__name__)
+                out[lang] = {"error": type(exc).__name__}
+    return out

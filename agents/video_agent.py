@@ -10,6 +10,7 @@ import logging
 import re
 import shutil
 import subprocess
+import time
 import tempfile
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from agents import logger, poster_pro
 from config import get_settings
 
 logging.getLogger("httpx").setLevel(logging.WARNING)  # the TTS request URL contains the API key
-HOOK_SECONDS, POINT_SECONDS, CTA_SECONDS = 3.5, 4.5, 4.5
+HOOK_SECONDS, POINT_SECONDS, CTA_SECONDS = 4.0, 6.0, 7.0   # 3 points -> about 29 seconds
 FADE = 0.3
 OUT_W, OUT_H, FPS = 720, 1280, 24
 
@@ -71,8 +72,54 @@ def _duration(ffmpeg: str, path: Path) -> float:
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
 
 
+def _heygen_video(specs: list[dict]) -> tuple[bytes, float] | None:
+    """AI avatar video from HeyGen (needs an API plan, credits and a Marathi voice id). None on any problem."""
+    s = get_settings()
+    if not (s.heygen_api_key and s.heygen_avatar_id and s.heygen_voice_id_mr):
+        logger.warning("HeyGen not used: HEYGEN_API_KEY / HEYGEN_AVATAR_ID / HEYGEN_VOICE_ID_MR missing")
+        return None
+    text = " ".join(sp["say"] for sp in specs if sp.get("say"))      # only our own fixed words and today's real tender dates
+    headers = {"X-Api-Key": s.heygen_api_key, "Content-Type": "application/json"}
+    payload = {"video_inputs": [{
+        "character": {"type": "avatar", "avatar_id": s.heygen_avatar_id, "avatar_style": "normal"},
+        "voice": {"type": "text", "input_text": text, "voice_id": s.heygen_voice_id_mr},
+        "background": {"type": "color", "value": "#0b2a4a"}}],
+        "dimension": {"width": OUT_W, "height": OUT_H}}
+    try:
+        created = httpx.post("https://api.heygen.com/v2/video/generate", headers=headers, json=payload, timeout=60)
+        video_id = (created.json().get("data") or {}).get("video_id")
+        if created.status_code != 200 or not video_id:
+            logger.warning("HeyGen rejected the request (http %s): %s", created.status_code, str(created.json().get("error"))[:160])
+            return None
+        deadline = time.time() + s.heygen_timeout_minutes * 60
+        while time.time() < deadline:
+            time.sleep(15)
+            data = httpx.get("https://api.heygen.com/v1/video_status.get", headers=headers, timeout=30,
+                             params={"video_id": video_id}).json().get("data") or {}
+            if data.get("status") == "completed" and data.get("video_url"):
+                return httpx.get(data["video_url"], timeout=180).content, float(data.get("duration") or 0)
+            if data.get("status") == "failed":
+                logger.warning("HeyGen video failed: %s", str(data.get("error"))[:160])
+                return None
+        logger.warning("HeyGen video timed out")
+    except Exception as exc:  # never log the request (it carries the API key header)
+        logger.warning("HeyGen video not created: %s", type(exc).__name__)
+    return None
+
+
 def make_video(headline: str, points: list[str], rows: list[dict] | None, link_display: str,
-               background: bytes | None) -> tuple[bytes, float] | None:
+               background: bytes | None, contact: str = "") -> tuple[bytes, float] | None:
+    """Daily video: HeyGen when VIDEO_PROVIDER=heygen, otherwise (or if HeyGen fails) the built-in ffmpeg video."""
+    if get_settings().video_provider == "heygen":
+        made = _heygen_video(build_specs(headline, points, rows, link_display))
+        if made:
+            return made
+        logger.warning("falling back to the built-in video")
+    return _make_local_video(headline, points, rows, link_display, background, contact)
+
+
+def _make_local_video(headline: str, points: list[str], rows: list[dict] | None, link_display: str,
+                      background: bytes | None, contact: str = "") -> tuple[bytes, float] | None:
     """Returns (mp4 bytes, seconds) or None. Never raises: a failed video must not stop the daily poster."""
     ffmpeg = ffmpeg_path()
     if not ffmpeg:
@@ -85,7 +132,7 @@ def make_video(headline: str, points: list[str], rows: list[dict] | None, link_d
             tmp_path = Path(tmp)
             durations, audio_files = [], []
             for i, sp in enumerate(specs):
-                frame = poster_pro.render_scene(sp["kind"], sp["text"], i, total, link_display, sp.get("date"), background)
+                frame = poster_pro.render_scene(sp["kind"], sp["text"], i, total, link_display, sp.get("date"), background, contact)
                 (tmp_path / f"f{i}.png").write_bytes(frame)
                 voice, dur = tts(sp["say"]), sp["min"]
                 if voice:

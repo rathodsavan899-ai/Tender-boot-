@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from agents import LLMUnavailable, format_inr, llm_available
 from agents import (analyzer_agent, bg_emd_agent, chat_agent, communication_agent, competitor_agent, marketplace_agent,
-                    payment_delay_agent, scraper_agent, tax_agent, tender_hunter_agent, vault_agent, content_agent, orchestrator_agent)
+                    payment_delay_agent, scraper_agent, tax_agent, tender_hunter_agent, vault_agent, content_agent, orchestrator_agent, meta_agent)
 from config import get_settings
 from pwa import router as pwa_router
 from database import (AuthSession, Contractor, ContentPost, ContentVideo, TenderSource, VaultDocument, PaymentBill, SessionLocal, Submission, Tender, check_access, get_db,
@@ -814,15 +814,22 @@ def discover_tenders(req: DiscoverRequest, db: Session = Depends(get_db)) -> dic
 def _tender_view(t: Tender) -> dict:
     return {"tender_id": t.tender_ref, "title": t.title, "department": t.department, "category": t.category,
             "district": t.district, "estimated_cost": t.estimated_cost, "emd_amount": t.emd_amount,
-            "source_url": t.source_url, "closing_date": t.closing_date.isoformat() if t.closing_date else None}
+            "source_url": t.source_url, "closing_date": t.closing_date.isoformat() if t.closing_date else None,
+            "state": t.state}
 
 
 @app.get("/tenders/search")
 def tenders_search(q: str | None = None, category: str | None = None, district: str | None = None,
                    department: str | None = None, min_cost: float | None = None, max_cost: float | None = None,
-                   include_closed: bool = False, limit: int = Query(50, ge=1, le=200),
+                   include_closed: bool = False, state: str | None = None, limit: int = Query(50, ge=1, le=200),
                    db: Session = Depends(get_db)) -> dict:
     stmt = select(Tender)
+    if state and state.strip().lower() == "all":
+        pass
+    elif state and state.strip():
+        stmt = stmt.where(Tender.state.ilike(state.strip()))
+    else:                                    # default: Maharashtra (tenders without a known state are kept)
+        stmt = stmt.where(or_(Tender.state.is_(None), Tender.state.ilike("Maharashtra")))
     if not include_closed:
         stmt = stmt.where(or_(Tender.closing_date.is_(None), Tender.closing_date >= date.today()))
     if q and q.strip():
@@ -1039,6 +1046,29 @@ async def telegram_webhook(secret: str, request: Request, background: Background
 def admin_set_telegram_webhook() -> dict:
     """Run once after TELEGRAM_BOT_TOKEN is set: connects the bot so /poster and /status work."""
     return communication_agent.telegram_set_webhook(f"{settings.public_base_url.rstrip('/')}/telegram-webhook/{_tg_secret()}")
+
+
+class MetaConnectIn(BaseModel):
+    user_token: str = Field(min_length=20, description="Short-lived token from Graph API Explorer")
+    page_id: str | None = None
+
+
+@app.api_route("/ping", methods=["GET", "HEAD"], include_in_schema=False)
+def ping() -> dict:
+    """Uptime ping target: no database access (so it does not keep the database awake or cost compute time)."""
+    orchestrator_agent.note_ping()
+    return {"ok": True}
+
+
+@app.post("/admin/meta/connect", dependencies=[Depends(require_admin)])
+def admin_meta_connect(req: MetaConnectIn) -> dict:
+    """Once: connects the Facebook Page + Instagram. The token is exchanged, stored encrypted and never shown again."""
+    return meta_agent.connect(req.user_token, req.page_id)
+
+
+@app.get("/admin/meta/status", dependencies=[Depends(require_admin)])
+def admin_meta_status() -> dict:
+    return meta_agent.health()
 
 
 @app.get("/admin/report", dependencies=[Depends(require_admin)])

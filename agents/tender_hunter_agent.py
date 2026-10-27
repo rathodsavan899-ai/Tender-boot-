@@ -91,7 +91,7 @@ def _crawl_url(db: Session, source: TenderSource, url_template: str) -> dict:
             if _keep(rec, source, kws, today):
                 db.add(Tender(tender_ref=rec["tender_ref"], title=rec["title"], department=rec["department"],
                               category=source.category or "general", district=source.district,
-                              estimated_cost=rec["estimated_cost"], closing_date=rec["closing_date"],
+                              estimated_cost=rec["estimated_cost"], closing_date=rec["closing_date"], state=rec["state"] or None,
                               source_url=url[:500]))
                 new += 1
         db.commit()

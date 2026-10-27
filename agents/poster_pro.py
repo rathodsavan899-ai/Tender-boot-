@@ -21,6 +21,14 @@ BACKGROUND_PROMPT = (
 
 TILES = ["शोध", "बिड रेट", "मंजुरी", "व्हॉल्ट", "GST", "AI सहाय्यक"]
 
+STRINGS = {
+    "mr": {"subtitle": "कंत्राटदारांसाठी AI सहाय्यक", "cta": "१५ दिवस मोफत ट्रायल", "fresh": "ताजे टेंडर",
+           "today": "आज काय करायचे?", "tiles": TILES, "closes": "शेवट"},
+    "en": {"subtitle": "AI assistant for contractors", "cta": "15-day free trial", "fresh": "Fresh tenders",
+           "today": "What would you like to do?",
+           "tiles": ["Search", "Bid rate", "Approval", "Vault", "GST", "AI assistant"], "closes": "Closes"},
+}
+
 
 class PosterUnavailable(RuntimeError):
     pass
@@ -132,7 +140,8 @@ def _glass(canvas, box, radius, fill, outline=None, width=2):
     canvas.alpha_composite(layer)
 
 
-def _phone(canvas, bold, regular, rows, x, y, w=410, h=600):
+def _phone(canvas, bold, regular, rows, x, y, w=410, h=600, strings=None):
+    strings = strings or STRINGS["mr"]
     from PIL import Image, ImageDraw, ImageFilter
     shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     ImageDraw.Draw(shadow).rounded_rectangle((x + 10, y + 24, x + w + 10, y + h + 24), radius=58, fill=(0, 0, 0, 150))
@@ -146,7 +155,7 @@ def _phone(canvas, bold, regular, rows, x, y, w=410, h=600):
     d.text((sx + 33, sy + 70), "T", font=bold(32), fill=NAVY)
     d.text((sx + 74, sy + 68), "TenderBot AI", font=bold(28), fill=WHITE)
     if rows:
-        d.text((sx + 24, sy + 124), "ताजे टेंडर", font=bold(26), fill=GOLD)
+        d.text((sx + 24, sy + 124), strings["fresh"], font=bold(26), fill=GOLD)
         yy = sy + 168
         for row in rows[:3]:
             _glass(canvas, (sx + 18, yy, sx + sw - 18, yy + 112), 20, (255, 255, 255, 34), (255, 255, 255, 70), 1)
@@ -157,12 +166,12 @@ def _phone(canvas, bold, regular, rows, x, y, w=410, h=600):
                 d.text((sx + 32, ty), line, font=f, fill=WHITE)
                 ty += 29
             if row.get("date"):
-                d.text((sx + 32, yy + 112 - 33), f"शेवट: {row['date']}", font=regular(20), fill=GOLD)
+                d.text((sx + 32, yy + 112 - 33), f"{strings['closes']}: {row['date']}", font=regular(20), fill=GOLD)
             yy += 124
     else:
-        d.text((sx + 24, sy + 124), "आज काय करायचे?", font=bold(26), fill=GOLD)
+        d.text((sx + 24, sy + 124), strings["today"], font=bold(26), fill=GOLD)
         colors = [(56, 189, 248), (74, 222, 128), (251, 191, 36), (244, 114, 182), (167, 139, 250), (148, 163, 184)]
-        for i, label in enumerate(TILES):
+        for i, label in enumerate(strings["tiles"]):
             cx, cy = sx + 18 + (i % 2) * ((sw - 36) // 2 + 4), sy + 168 + (i // 2) * 124
             _glass(canvas, (cx, cy, cx + (sw - 36) // 2 - 4, cy + 112), 20, (255, 255, 255, 34), (255, 255, 255, 70), 1)
             d = ImageDraw.Draw(canvas)
@@ -171,9 +180,11 @@ def _phone(canvas, bold, regular, rows, x, y, w=410, h=600):
 
 
 def render_poster_pro(headline: str, card_points: list[str], note: str | None, link: str,
-                      rows: list[dict] | None = None, background: bytes | None = None) -> bytes:
+                      rows: list[dict] | None = None, background: bytes | None = None,
+                      lang: str = "mr", contact: str = "") -> bytes:
     from PIL import Image, ImageDraw
     bold, regular = _fonts()
+    strings = STRINGS.get(lang, STRINGS["mr"])
     if background:
         try:
             base = _cover(Image.open(io.BytesIO(background)).convert("RGB"), W, H)
@@ -191,7 +202,7 @@ def render_poster_pro(headline: str, card_points: list[str], note: str | None, l
     d.rectangle((102, 92, 114, 130), fill=WHITE)
     d.rectangle((84, 136, 132, 142), fill=GOLD)
     d.text((176, 56), "TenderBot AI", font=bold(60), fill=WHITE)
-    d.text((178, 126), "कंत्राटदारांसाठी AI सहाय्यक", font=regular(30), fill=(255, 205, 120))
+    d.text((178, 126), strings["subtitle"], font=regular(30), fill=(255, 205, 120))
 
     # headline: first line white, the rest gold
     size = 90
@@ -220,7 +231,7 @@ def render_poster_pro(headline: str, card_points: list[str], note: str | None, l
             d.text((128, cy + 16 + j * 44), line, font=card_font, fill=WHITE)
         cy += ch + 20
 
-    _phone(canvas, bold, regular, rows, x=610, y=455)
+    _phone(canvas, bold, regular, rows, x=610, y=455, strings=strings)
     d = ImageDraw.Draw(canvas, "RGBA")
 
     # call to action
@@ -228,11 +239,14 @@ def render_poster_pro(headline: str, card_points: list[str], note: str | None, l
         nf = regular(26)
         d.text((60, H - 262), _clip(d, note, nf, W - 120, 1)[0], font=nf, fill=(205, 220, 240))
     d.rounded_rectangle((60, H - 214, W - 60, H - 100), radius=40, fill=GOLD + (255,))
-    cta, cf = "१५ दिवस मोफत ट्रायल", bold(58)
+    cta, cf = strings["cta"], bold(58)
     d.text(((W - d.textlength(cta, font=cf)) / 2, H - 196), cta, font=cf, fill=NAVY)
+    if contact:
+        wf = bold(36)
+        d.text(((W - d.textlength(contact, font=wf)) / 2, H - 92), contact, font=wf, fill=GOLD)
     if link:
-        lf = regular(34)
-        d.text(((W - d.textlength(link, font=lf)) / 2, H - 76), link, font=lf, fill=WHITE)
+        lf = regular(28)
+        d.text(((W - d.textlength(link, font=lf)) / 2, H - 46), link, font=lf, fill=WHITE)
     out = io.BytesIO()
     canvas.convert("RGB").save(out, format="PNG", optimize=True)
     return out.getvalue()
@@ -278,7 +292,7 @@ def _scene_logo(canvas, bold, regular):
 
 
 def render_scene(kind: str, text: str, index: int, total: int, link: str = "", date: str | None = None,
-                 background: bytes | None = None) -> bytes:
+                 background: bytes | None = None, contact: str = "") -> bytes:
     """One 1080x1920 frame. kind: hook | point | cta."""
     from PIL import ImageDraw
     bold, regular = _fonts()
@@ -331,7 +345,10 @@ def render_scene(kind: str, text: str, index: int, total: int, link: str = "", d
         if link:
             kf = bold(48)
             d.text(((VW - d.textlength(link, font=kf)) / 2, 1060), link, font=kf, fill=WHITE)
-        d.text(((VW - d.textlength("TenderBot AI", font=bold(60))) / 2, 1240), "TenderBot AI", font=bold(60), fill=WHITE)
+        if contact:
+            cf2 = bold(54)
+            d.text(((VW - d.textlength(contact, font=cf2)) / 2, 1150), contact, font=cf2, fill=GOLD)
+        d.text(((VW - d.textlength("TenderBot AI", font=bold(60))) / 2, 1290), "TenderBot AI", font=bold(60), fill=WHITE)
 
     out = io.BytesIO()
     canvas.convert("RGB").save(out, format="PNG")

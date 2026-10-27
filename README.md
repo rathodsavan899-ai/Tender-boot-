@@ -54,6 +54,17 @@ A ~20-second vertical video (720x1280) is made the same way and sent to Telegram
 daily post is re-made without the video; a stuck post is re-sent; each problem alerts the owner once a day.
 An honesty guard blocks social posting if the caption has banned claims (guarantees, win rates, store badges, "first in India").
 It never changes the database schema or keys, and portal submission with the DSC always waits for the owner.
+### Two posters a day, WhatsApp lead link, Meta publishing, uptime
+- Every day a **Marathi** poster (Maharashtra) and an **English** poster (other states / global) are made; the English one is
+  published `ENGLISH_POST_DELAY_HOURS` (5) hours later. The caption of every poster and video ends with the WhatsApp lead link
+  (`LEAD_WHATSAPP_NUMBER`, default 917028352281). Marathi tender posters use Maharashtra tenders; the English tender poster uses
+  other states and needs one more source (`POST /admin/tender-sources` with no `state_filter`, e.g. category `civil-india`).
+- **Facebook / Instagram (one time):** set `META_APP_ID` and `META_APP_SECRET`, get a short-lived user token in Graph API Explorer
+  (permissions: pages_show_list, pages_read_engagement, pages_manage_posts, instagram_basic, instagram_content_publish), then
+  `POST /admin/meta/connect {"user_token": "..."}`. The Page token is stored encrypted; `GET /admin/meta/status` checks it.
+  Instagram links in captions are not clickable: put the WhatsApp link in the Instagram bio.
+- **Never sleep:** point a pinger at `GET /ping` (UptimeRobot free, every 5 minutes) — the nightly report shows whether pings arrive.
+- `VIDEO_PROVIDER=heygen` (needs HEYGEN_* values) tries an AI avatar video first and falls back to the built-in video.
 YouTube is not automated: API uploads stay private until Google audits the project.
 
 ## Business rules (enforced in `database.check_access`)
