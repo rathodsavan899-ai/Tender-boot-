@@ -432,6 +432,16 @@ def post_instagram(post: ContentPost, has_video: bool = False) -> dict | None:
         return {"ok": False, "error": type(exc).__name__}
 
 
+def youtube_pack(post: ContentPost) -> str:
+    """Title, description and tags for a YouTube Short, ready to copy (API uploads stay private until Google audits the app)."""
+    title = f"{post.headline} | TenderBot AI #Shorts"[:98]
+    link = lead_link(post.lang)[0]
+    tags = "TenderBot AI, tender, contractor, Maharashtra tenders, GST, civil contractor, shorts" if post.lang == "en" \
+        else "TenderBot AI, टेंडर, कंत्राटदार, महाराष्ट्र, GST, सिव्हिल कंत्राटदार, shorts"
+    return (f"▶️ YouTube Shorts ({'English' if post.lang == 'en' else 'मराठी'}) — वरचा व्हिडिओ सेव्ह करून YouTube ॲपमध्ये "
+            f"(+ → Create a Short → Upload) टाका:\n\nTitle:\n{title}\n\nDescription:\n{post.caption}\n\nTags:\n{tags}")
+
+
 def _notify_owner(db: Session, post: ContentPost) -> dict:
     result: dict = {}
     video = db.scalar(select(ContentVideo).where(ContentVideo.post_id == post.id))
@@ -442,6 +452,8 @@ def _notify_owner(db: Session, post: ContentPost) -> dict:
     if video:
         result["telegram_video"] = communication_agent.notify_admin_video(video.mp4, f"{label}: {post.headline}"[:200])
     result["telegram_text"] = communication_agent.notify_admin(summary)
+    if video:
+        result["telegram_youtube"] = communication_agent.notify_admin(youtube_pack(post))
     return result
 
 
@@ -509,7 +521,7 @@ def generate_today(db: Session, force: bool = False, with_video: bool = True, la
     _, pretty = lead_link(lang)
     contact = f"WhatsApp: {pretty}"
     topic = pick_topic(db, today, lang)
-    poster, poster_error = None, None
+    poster, poster_error, video_error = None, None, None
     background = _ai_background(db)
     try:
         try:
@@ -533,15 +545,26 @@ def generate_today(db: Session, force: bool = False, with_video: bool = True, la
     db.add(post)
     db.commit()
     db.refresh(post)
-    if lang == "mr" and with_video and s.content_video and poster_error is None:
-        made = video_agent.make_video(topic["headline"], topic["points"], topic.get("rows"), short_link, background, contact)
+    if lang in [x.strip() for x in s.content_video_langs.split(",")] and with_video and s.content_video and poster_error is None:
+        video_agent.LAST_ERROR = ""
+        made = video_agent.make_video(topic["headline"], topic["points"], topic.get("rows"), short_link, background, contact, lang)
         if made:
             db.add(ContentVideo(post_id=post.id, mp4=made[0], seconds=made[1]))
             db.commit()
+        else:
+            video_error = video_agent.LAST_ERROR or "unknown (see Render logs)"
     # honesty guard: everything we write ourselves (headline, note, fixed points, caption template) must be clean
     static_caption = build_caption({**topic, "points": [] if topic["kind"] == "tender" else topic["points"]}, link, lang)
     static_text = " ".join([topic["headline"], topic.get("note") or "", static_caption] + (topic.get("card_points") or []))
     deliver(db, post, honesty_violations(static_text), publish=publish)
+    if video_error:                                   # keep the reason so the report can show it
+        try:
+            info = json.loads(post.delivery or "{}")
+        except ValueError:
+            info = {}
+        info["video_error"] = video_error
+        post.delivery = json.dumps(info, ensure_ascii=False, default=str)
+        db.commit()
     for old in db.scalars(select(ContentPost).where(ContentPost.post_date < today - timedelta(days=45))):
         db.delete(old)
     db.commit()

@@ -23,10 +23,12 @@ TILES = ["शोध", "बिड रेट", "मंजुरी", "व्हॉ
 
 STRINGS = {
     "mr": {"subtitle": "कंत्राटदारांसाठी AI सहाय्यक", "cta": "१५ दिवस मोफत ट्रायल", "fresh": "ताजे टेंडर",
-           "today": "आज काय करायचे?", "tiles": TILES, "closes": "शेवट"},
+           "today": "आज काय करायचे?", "tiles": TILES, "closes": "शेवट",
+           "closing_long": "शेवटची तारीख", "start_today": "आजच सुरू करा", "cta_lines": "१५ दिवस\nमोफत ट्रायल"},
     "en": {"subtitle": "AI assistant for contractors", "cta": "15-day free trial", "fresh": "Fresh tenders",
            "today": "What would you like to do?",
-           "tiles": ["Search", "Bid rate", "Approval", "Vault", "GST", "AI assistant"], "closes": "Closes"},
+           "tiles": ["Search", "Bid rate", "Approval", "Vault", "GST", "AI assistant"], "closes": "Closes",
+           "closing_long": "Closing date", "start_today": "Start today", "cta_lines": "15-day\nfree trial"},
 }
 
 
@@ -280,7 +282,7 @@ def _scene_canvas(background: bytes | None, darkness: float):
     return canvas
 
 
-def _scene_logo(canvas, bold, regular):
+def _scene_logo(canvas, bold, regular, subtitle="कंत्राटदारांसाठी AI सहाय्यक"):
     from PIL import ImageDraw
     d = ImageDraw.Draw(canvas)
     d.rounded_rectangle((60, 70, 156, 166), radius=24, fill=BLUE + (255,), outline=WHITE + (255,), width=3)
@@ -288,16 +290,17 @@ def _scene_logo(canvas, bold, regular):
     d.rectangle((102, 108, 114, 146), fill=WHITE)
     d.rectangle((84, 152, 132, 158), fill=GOLD)
     d.text((176, 70), "TenderBot AI", font=bold(60), fill=WHITE)
-    d.text((178, 140), "कंत्राटदारांसाठी AI सहाय्यक", font=regular(30), fill=(255, 205, 120))
+    d.text((178, 140), subtitle, font=regular(30), fill=(255, 205, 120))
 
 
 def render_scene(kind: str, text: str, index: int, total: int, link: str = "", date: str | None = None,
-                 background: bytes | None = None, contact: str = "") -> bytes:
-    """One 1080x1920 frame. kind: hook | point | cta."""
+                 background: bytes | None = None, contact: str = "", lang: str = "mr") -> bytes:
+    """One 1080x1920 frame. kind: hook | point | cta. lang: mr | en."""
     from PIL import ImageDraw
+    S = STRINGS.get(lang, STRINGS["mr"])
     bold, regular = _fonts()
     canvas = _scene_canvas(background, {"hook": 0.48, "point": 0.60, "cta": 0.72}[kind])
-    _scene_logo(canvas, bold, regular)
+    _scene_logo(canvas, bold, regular, S["subtitle"])
     d = ImageDraw.Draw(canvas)
 
     if kind == "hook":
@@ -330,16 +333,16 @@ def render_scene(kind: str, text: str, index: int, total: int, link: str = "", d
             d.text((110, y), line, font=tf, fill=WHITE)
             y += int(tf.size * 1.42)
         if date:
-            d.text((110, 1190), f"शेवटची तारीख: {date}", font=bold(50), fill=GOLD)
+            d.text((110, 1190), f"{S['closing_long']}: {date}", font=bold(50), fill=GOLD)
         for i in range(total):
             cx = VW // 2 - (total - 1) * 36 + i * 72
             d.ellipse((cx - 14, VH - 300, cx + 14, VH - 272), fill=(GOLD if i + 1 == index else (255, 255, 255, 110)))
 
     else:  # cta
         lf = regular(44)
-        d.text(((VW - d.textlength("आजच सुरू करा", font=lf)) / 2, 620), "आजच सुरू करा", font=lf, fill=(255, 205, 120))
+        d.text(((VW - d.textlength(S["start_today"], font=lf)) / 2, 620), S["start_today"], font=lf, fill=(255, 205, 120))
         d.rounded_rectangle((60, 720, VW - 60, 960), radius=60, fill=GOLD + (255,))
-        cta, cf = "१५ दिवस\nमोफत ट्रायल", bold(80)
+        cta, cf = S["cta_lines"], bold(80)
         for i, line in enumerate(cta.split("\n")):
             d.text(((VW - d.textlength(line, font=cf)) / 2, 745 + i * 100), line, font=cf, fill=NAVY)
         if link:

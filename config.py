@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     hunter_interval_hours: int = 6
     content_hour_ist: int = 8
     content_ai_background: bool = False
-    content_video: bool = True
+    content_video: bool = False   # videos are off by default; posters/banners are always made
     lead_whatsapp_number: str = "917028352281"
     english_post_delay_hours: int = 5
     meta_app_id: str = ""
@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     heygen_timeout_minutes: int = 10
     google_tts_api_key: str = ""
     google_tts_voice: str = "mr-IN-Wavenet-A"
+    google_tts_voice_en: str = "en-IN-Wavenet-A"
+    content_video_langs: str = "mr,en"
     openai_image_model: str = "gpt-image-1"
     facebook_page_id: str = ""
     facebook_page_token: str = ""

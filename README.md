@@ -65,6 +65,7 @@ It never changes the database schema or keys, and portal submission with the DSC
   Instagram links in captions are not clickable: put the WhatsApp link in the Instagram bio.
 - **Never sleep:** point a pinger at `GET /ping` (UptimeRobot free, every 5 minutes) — the nightly report shows whether pings arrive.
 - `VIDEO_PROVIDER=heygen` (needs HEYGEN_* values) tries an AI avatar video first and falls back to the built-in video.
+Videos are OFF by default (`CONTENT_VIDEO=false`); posters/banners are always made. To switch videos on set `CONTENT_VIDEO=true` — they are then made in the languages of `CONTENT_VIDEO_LANGS`. For every video the owner also gets a ready YouTube Shorts pack (title, description, tags) on Telegram; if a video cannot be made, the reason is shown in the report.
 YouTube is not automated: API uploads stay private until Google audits the project.
 
 ## Business rules (enforced in `database.check_access`)

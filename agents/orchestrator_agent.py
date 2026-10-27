@@ -68,10 +68,11 @@ def check_hunter(db: Session) -> tuple[str, str]:
     if not sources:
         return "FAIL", "कोणताही टेंडर स्रोत चालू नाही"
     down = [s.name for s in sources if s.status == "down"]
+    reasons = "; ".join(f"{s.name}: {(s.last_error or '?')[:90]}" for s in sources if s.status == "down")
     last_ok = max((s.last_ok_at for s in sources if s.last_ok_at), default=None)
     new_24h = db.scalar(select(func.count(Tender.id)).where(Tender.created_at >= utcnow() - timedelta(hours=24))) or 0
     if len(down) == len(sources):
-        return "FAIL", "सर्व स्रोत बंद: " + ", ".join(down)
+        return "FAIL", "सर्व स्रोत बंद → " + reasons
     if last_ok is None:
         return "WARN", "अजून एकही यशस्वी वाचन नाही"
     age = (utcnow() - last_ok).total_seconds() / 3600
@@ -102,6 +103,9 @@ def check_content(db: Session) -> tuple[str, str]:
         state = {"posted": "प्रकाशित", "scheduled": "वेळेवर प्रकाशनासाठी तयार", "sent": "Telegram वर", "draft": "तयार"}.get(post.status, post.status)
         parts.append(f"{label}: पोस्टर {'✔' if post.poster_png else '✘'} ({state})")
         age = (utcnow() - post.created_at).total_seconds()
+        if post.status == "draft" and age <= DRAFT_STUCK_MINUTES * 60:
+            parts[-1] = f"{label}: बनत आहे (व्हिडिओ/पाठवणी सुरू)"
+            continue                                   # still being made: not a failure
         if post.status == "draft" and age > DRAFT_STUCK_MINUTES * 60:
             problems.append(f"{label} पोस्ट तयार झाली पण पाठवली गेली नाही")
         if post.status == "scheduled" and post.publish_after and (utcnow() - post.publish_after).total_seconds() > DRAFT_STUCK_MINUTES * 60:
@@ -116,7 +120,17 @@ def check_content(db: Session) -> tuple[str, str]:
             problems.append(f"{label}: दिशाभूल-तपासणीने सोशल पोस्टिंग थांबवली")
     marathi = posts["mr"]
     has_video = db.scalar(select(ContentVideo.id).where(ContentVideo.post_id == marathi.id)) is not None
-    parts.append("व्हिडिओ ✔" if has_video else "व्हिडिओ ✘")
+    if not s.content_video:
+        pass                                           # videos switched off on purpose: not a problem, not shown
+    elif has_video:
+        parts.append("व्हिडिओ ✔")
+    else:
+        try:
+            reason = json.loads(marathi.delivery or "{}").get("video_error")
+        except ValueError:
+            reason = None
+        in_progress = marathi.status == "draft" and (utcnow() - marathi.created_at).total_seconds() <= DRAFT_STUCK_MINUTES * 60
+        parts.append("व्हिडिओ बनत आहे" if in_progress else f"व्हिडिओ ✘ ({reason or 'कारण नोंदलेले नाही'})")
     return ("WARN" if problems else "OK"), " · ".join(parts + problems)
 
 

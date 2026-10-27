@@ -36,29 +36,34 @@ def ffmpeg_path() -> str | None:
         return None
 
 
-def build_specs(headline: str, points: list[str], rows: list[dict] | None, link: str) -> list[dict]:
+def build_specs(headline: str, points: list[str], rows: list[dict] | None, link: str, lang: str = "mr") -> list[dict]:
     """Scenes: hook, one per point (or per real tender), call to action. `say` is what the voice reads."""
     specs = [{"kind": "hook", "text": headline, "say": headline, "min": HOOK_SECONDS, "date": None}]
     if rows:
         for row in rows[:3]:
-            say = f"शेवटची तारीख {row['date']}. सविस्तर ॲपमध्ये." if row.get("date") else "सविस्तर ॲपमध्ये पाहा."
+            if lang == "en":
+                say = f"Closing date {row['date']}. Details in the app." if row.get("date") else "See the details in the app."
+            else:
+                say = f"शेवटची तारीख {row['date']}. सविस्तर ॲपमध्ये." if row.get("date") else "सविस्तर ॲपमध्ये पाहा."
             specs.append({"kind": "point", "text": row["title"], "say": say, "min": POINT_SECONDS, "date": row.get("date")})
     else:
         for point in points[:3]:
             specs.append({"kind": "point", "text": point, "say": point, "min": POINT_SECONDS, "date": None})
     specs.append({"kind": "cta", "text": "", "link": link, "min": CTA_SECONDS, "date": None,
-                  "say": "TenderBot AI. पंधरा दिवस मोफत ट्रायल. आजच सुरू करा."})
+                  "say": ("TenderBot AI. Try it free for fifteen days. Message us on WhatsApp to get started." if lang == "en"
+                          else "TenderBot AI. पंधरा दिवस मोफत ट्रायल. आजच सुरू करा.")})
     return specs
 
 
-def tts(text: str) -> bytes | None:
+def tts(text: str, lang: str = "mr") -> bytes | None:
     s = get_settings()
     if not s.google_tts_api_key or not text.strip():
         return None
     try:
         r = httpx.post("https://texttospeech.googleapis.com/v1/text:synthesize", timeout=30,
                        params={"key": s.google_tts_api_key},
-                       json={"input": {"text": text}, "voice": {"languageCode": "mr-IN", "name": s.google_tts_voice},
+                       json={"input": {"text": text}, "voice": {"languageCode": "en-IN" if lang == "en" else "mr-IN",
+                                       "name": s.google_tts_voice_en if lang == "en" else s.google_tts_voice},
                              "audioConfig": {"audioEncoding": "MP3", "speakingRate": 0.95}})
         return base64.b64decode(r.json()["audioContent"])
     except Exception as exc:  # never log the response/URL (contains the key)
@@ -107,34 +112,42 @@ def _heygen_video(specs: list[dict]) -> tuple[bytes, float] | None:
     return None
 
 
+LAST_ERROR: str = ""
+
+
+def _fail(reason: str) -> None:
+    global LAST_ERROR
+    LAST_ERROR = reason[:200]
+
+
 def make_video(headline: str, points: list[str], rows: list[dict] | None, link_display: str,
-               background: bytes | None, contact: str = "") -> tuple[bytes, float] | None:
-    """Daily video: HeyGen when VIDEO_PROVIDER=heygen, otherwise (or if HeyGen fails) the built-in ffmpeg video."""
-    if get_settings().video_provider == "heygen":
-        made = _heygen_video(build_specs(headline, points, rows, link_display))
+               background: bytes | None, contact: str = "", lang: str = "mr") -> tuple[bytes, float] | None:
+    """Daily video: HeyGen when VIDEO_PROVIDER=heygen (Marathi only), otherwise (or if HeyGen fails) the built-in ffmpeg video."""
+    if get_settings().video_provider == "heygen" and lang == "mr":
+        made = _heygen_video(build_specs(headline, points, rows, link_display, lang))
         if made:
             return made
         logger.warning("falling back to the built-in video")
-    return _make_local_video(headline, points, rows, link_display, background, contact)
+    return _make_local_video(headline, points, rows, link_display, background, contact, lang)
 
 
 def _make_local_video(headline: str, points: list[str], rows: list[dict] | None, link_display: str,
-                      background: bytes | None, contact: str = "") -> tuple[bytes, float] | None:
+                      background: bytes | None, contact: str = "", lang: str = "mr") -> tuple[bytes, float] | None:
     """Returns (mp4 bytes, seconds) or None. Never raises: a failed video must not stop the daily poster."""
     ffmpeg = ffmpeg_path()
     if not ffmpeg:
-        logger.warning("video not created: ffmpeg missing")
+        _fail("ffmpeg missing")
         return None
     try:
-        specs = build_specs(headline, points, rows, link_display)
+        specs = build_specs(headline, points, rows, link_display, lang)
         total = sum(1 for sp in specs if sp["kind"] == "point")
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             durations, audio_files = [], []
             for i, sp in enumerate(specs):
-                frame = poster_pro.render_scene(sp["kind"], sp["text"], i, total, link_display, sp.get("date"), background, contact)
+                frame = poster_pro.render_scene(sp["kind"], sp["text"], i, total, link_display, sp.get("date"), background, contact, lang)
                 (tmp_path / f"f{i}.png").write_bytes(frame)
-                voice, dur = tts(sp["say"]), sp["min"]
+                voice, dur = tts(sp["say"], lang), sp["min"]
                 if voice:
                     mp3 = tmp_path / f"a{i}.mp3"
                     mp3.write_bytes(voice)
@@ -170,8 +183,10 @@ def _make_local_video(headline: str, points: list[str], rows: list[dict] | None,
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             if proc.returncode != 0 or not out.exists():
                 logger.warning("video encoding failed: %s", proc.stderr[-300:])
+                _fail("encoding failed: " + proc.stderr[-120:].strip().replace("\n", " "))
                 return None
             return out.read_bytes(), float(sum(durations))
     except Exception as exc:
         logger.warning("video not created: %s", type(exc).__name__)
+        _fail(f"{type(exc).__name__}: {str(exc)[:80]}")
         return None
