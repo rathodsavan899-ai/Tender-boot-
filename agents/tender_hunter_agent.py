@@ -48,6 +48,9 @@ def _fetch(url: str) -> str:
         except ValueError:
             raise                      # host not allowed -> retrying is pointless
         except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status and 400 <= status < 500 and status != 429:
+                raise                  # 404/403 will not fix itself in a few seconds: do not wait and retry
             last = exc
             time.sleep(2 * (attempt + 1))
     raise last  # type: ignore[misc]
@@ -80,7 +83,17 @@ def _crawl_url(db: Session, source: TenderSource, url_template: str) -> dict:
     found = new = 0
     for page in pages:
         url = url_template.replace("{page}", str(page))
-        records = scraper_agent.parse_tender_listing(_fetch(url))
+        try:
+            html = _fetch(url)
+        except ValueError:
+            raise
+        except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if page > 1 and found > 0 and status in (404, 410):
+                break                                   # the listing simply has no further page
+            where = url.split("?")[0].replace("https://", "")[-70:]
+            raise RuntimeError(f"पान {page} ({where}): " + (f"HTTP {status}" if status else type(exc).__name__)) from None
+        records = scraper_agent.parse_tender_listing(html)
         if not records:
             break
         found += len(records)
@@ -106,6 +119,8 @@ def _crawl_url(db: Session, source: TenderSource, url_template: str) -> dict:
 
 def crawl_source(db: Session, source: TenderSource) -> dict:
     attempts = [("main", source.url)] + ([("backup", source.backup_url)] if source.backup_url else [])
+    if "/cppp/latestactivetendersnew/mmpdata" in source.url:      # the same CPPP list on its shorter, default path
+        attempts.append(("alternate", source.url.replace("/cppp/latestactivetendersnew/mmpdata", "/cppp/latestactivetendersnew")))
     error = "no_rows"
     result: dict | None = None
     used = None
@@ -139,8 +154,8 @@ def crawl_source(db: Session, source: TenderSource) -> dict:
                                          "बॅकअप लिंक नसेल तर या स्रोताचे नवे टेंडर येत नाहीत.")
     elif result is not None and previous_status == "down":
         communication_agent.notify_admin(f"✅ टेंडर स्रोत पुन्हा चालू: {source.name}")
-    if result is not None and used == "backup":
-        _alert_once_a_day(source, "backup", f"ℹ️ {source.name}: मुख्य लिंक चालत नाही, बॅकअप लिंक वापरली जात आहे.")
+    if result is not None and used in ("backup", "alternate"):
+        _alert_once_a_day(source, "backup", f"ℹ️ {source.name}: मुख्य लिंक चालत नाही, {'बॅकअप' if used == 'backup' else 'पर्यायी'} लिंक वापरली जात आहे.")
     return {"source": source.name, "ok": result is not None, "used": used, "status": source.status,
             "found": source.last_found, "new": source.last_new, "error": source.last_error}
 
